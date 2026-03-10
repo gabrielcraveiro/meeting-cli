@@ -246,19 +246,27 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       ui.appendLine(chalk.gray('  ─────────────────────────────────────────'));
       ui.appendLine(chalk.bold.magenta('  Insights') + chalk.gray(` (${formatTime(elapsedSec)})`));
 
+      // Highlight lines that mention the user by name
+      const userName = (config.speakerNames && Object.values(config.speakerNames).find(n => /gabriel/i.test(n))) || 'Gabriel';
+      const userPattern = new RegExp(userName, 'i');
+
       for (const line of response.split('\n')) {
         const t = line.trim();
         if (!t || t === '-') continue;
+
+        const mentionsMe = userPattern.test(t);
+        const prefix = mentionsMe ? chalk.bgYellow.black(' >> ') + ' ' : '  ';
+
         if (t.includes('[decisao]')) {
-          ui.appendLine(chalk.green('  ' + t));
+          ui.appendLine(prefix + (mentionsMe ? chalk.green.bold(t) : chalk.green(t)));
         } else if (t.includes('[acao]')) {
-          ui.appendLine(chalk.cyan('  ' + t));
+          ui.appendLine(prefix + (mentionsMe ? chalk.cyan.bold(t) : chalk.cyan(t)));
         } else if (t.includes('[risco]')) {
-          ui.appendLine(chalk.red('  ' + t));
+          ui.appendLine(prefix + (mentionsMe ? chalk.red.bold(t) : chalk.red(t)));
         } else if (t.includes('[ponto]')) {
-          ui.appendLine(chalk.white('  ' + t));
+          ui.appendLine(prefix + (mentionsMe ? chalk.white.bold(t) : chalk.white(t)));
         } else {
-          ui.appendLine(chalk.gray('  ' + t));
+          ui.appendLine(prefix + (mentionsMe ? chalk.bold(t) : chalk.gray(t)));
         }
       }
       ui.appendLine(chalk.gray('  ─────────────────────────────────────────'));
