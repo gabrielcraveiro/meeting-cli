@@ -613,9 +613,13 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     if (recentMeetings.length > 0) {
       const briefingLines: string[] = [];
       for (const m of recentMeetings) {
-        const firstLine = m.split('\n')[0];
-        const preview = m.split('\n').slice(1, 3).join(' ').slice(0, 80);
-        briefingLines.push(`${chalk.white(firstLine)}`);
+        const lines = m.split('\n');
+        const dateLine = lines[0]; // [YYYY-MM-DD HH:MM]
+        // Get first meaningful content line (skip headers, empty lines, participant lists)
+        const contentLines = lines.slice(1)
+          .filter(l => l.trim() && !l.startsWith('##') && !l.startsWith('- [Speaker') && !l.startsWith('- **Speaker') && !l.startsWith('Participantes:'));
+        const preview = contentLines.slice(0, 2).join(' ').replace(/\*\*/g, '').slice(0, 100);
+        briefingLines.push(`${chalk.white(dateLine)}`);
         if (preview.trim()) briefingLines.push(`${chalk.gray(preview)}...`);
       }
       console.log(boxen(briefingLines.join('\n'), {
@@ -656,6 +660,14 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
           // Track RMS for silence detection + retroactive trim
           const rmsDb = parseFloat(evt.rmsDb);
           segmentRmsDb.set(evt.index, rmsDb);
+
+          // Early warning: no audio signal at all (dead capture)
+          if (evt.index <= 2 && rmsDb <= -99) {
+            ui.appendLine(chalk.red.bold('  AVISO: Audio sem sinal! Verifique:'));
+            ui.appendLine(chalk.red('    - Dispositivo de saida do Windows (fone/caixa)'));
+            ui.appendLine(chalk.red('    - Permissao de microfone no Windows'));
+            ui.appendLine(chalk.red('    - Se ha audio tocando no sistema'));
+          }
 
           if (rmsDb < SILENCE_THRESHOLD_DB) {
             consecutiveSilentSegments++;

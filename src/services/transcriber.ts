@@ -84,7 +84,8 @@ function detectContentType(filePath: string): string {
 }
 
 async function callDeepgram(audioBuffer: Buffer, contentType: string, params: URLSearchParams, config: Config): Promise<DeepgramResponse> {
-  const response = await fetch(`https://api.deepgram.com/v1/listen?${params}`, {
+  const url = `https://api.deepgram.com/v1/listen?${params}`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Token ${config.deepgramApiKey}`,
@@ -96,7 +97,16 @@ async function callDeepgram(audioBuffer: Buffer, contentType: string, params: UR
     const err = await response.text();
     throw new Error(`Deepgram error ${response.status}: ${err}`);
   }
-  return (await response.json()) as DeepgramResponse;
+  const data = (await response.json()) as DeepgramResponse;
+
+  // Debug: log if response has no transcript
+  const transcript = data.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+  const duration = data.metadata?.duration || 0;
+  if (!transcript.trim() && duration > 1) {
+    console.error(`[deepgram] Empty transcript for ${(audioBuffer.length / 1024).toFixed(0)}KB audio (${duration.toFixed(1)}s). Model: ${params.get('model')}`);
+  }
+
+  return data;
 }
 
 // Fast mode: for live segments — no diarization, fast response
