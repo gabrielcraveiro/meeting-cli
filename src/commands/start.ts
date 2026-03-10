@@ -390,34 +390,44 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
         }
       }
 
-      if (unknownSpeakers.length > 0 && rl) {
-        console.log(chalk.bold('\n  Identificacao de speakers:\n'));
-        for (const id of unknownSpeakers) {
-          const label = `[Speaker ${id}]`;
-          const lines = fullTranscript.split('\n').filter(l => l.includes(label));
-          const sample = lines.slice(0, 2).map(l => l.replace(label, '').trim().slice(0, 80)).join(' | ');
-          console.log(chalk.cyan(`  Speaker ${id}:`) + chalk.gray(` "${sample}"`));
-        }
-        console.log(chalk.gray('  (Enter para pular, nome para salvar no config)\n'));
+      if (unknownSpeakers.length > 0) {
+        // Recreate readline for the wizard (original may be closed by Ctrl+C)
+        let wizardRl: readline.Interface | null = null;
+        try {
+          wizardRl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        } catch {}
 
-        for (const id of unknownSpeakers) {
-          const name = await new Promise<string>((resolve) => {
-            rl!.question(chalk.cyan(`  Speaker ${id} = `), (answer: string) => {
-              resolve(answer.trim());
-            });
-          });
-          if (name) {
-            if (!config.speakerNames) config.speakerNames = {};
-            config.speakerNames[`Speaker ${id}`] = name;
-            fullTranscript = fullTranscript.replace(new RegExp(`\\[Speaker ${id}\\]`, 'g'), `[${name}]`);
+        if (wizardRl) {
+          console.log(chalk.bold('\n  Identificacao de speakers:\n'));
+          for (const id of unknownSpeakers) {
+            const label = `[Speaker ${id}]`;
+            const lines = fullTranscript.split('\n').filter(l => l.includes(label));
+            const sample = lines.slice(0, 2).map(l => l.replace(label, '').trim().slice(0, 80)).join(' | ');
+            console.log(chalk.cyan(`  Speaker ${id}:`) + chalk.gray(` "${sample}"`));
           }
-        }
+          console.log(chalk.gray('  (Enter para pular, nome para salvar no config)\n'));
 
-        // Save updated config with new speaker names
-        if (Object.keys(config.speakerNames || {}).length > 0) {
-          const { saveConfig } = await import('../config');
-          saveConfig(config);
-          console.log(chalk.green('  Speaker names salvos no config.\n'));
+          const askRl = wizardRl;
+          for (const id of unknownSpeakers) {
+            const name = await new Promise<string>((resolve) => {
+              askRl.question(chalk.cyan(`  Speaker ${id} = `), (answer: string) => {
+                resolve(answer.trim());
+              });
+            });
+            if (name) {
+              if (!config.speakerNames) config.speakerNames = {};
+              config.speakerNames[`Speaker ${id}`] = name;
+              fullTranscript = fullTranscript.replace(new RegExp(`\\[Speaker ${id}\\]`, 'g'), `[${name}]`);
+            }
+          }
+          askRl.close();
+
+          // Save updated config with new speaker names
+          if (Object.keys(config.speakerNames || {}).length > 0) {
+            const { saveConfig } = await import('../config');
+            saveConfig(config);
+            console.log(chalk.green('  Speaker names salvos no config.\n'));
+          }
         }
       }
     }
