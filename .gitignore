@@ -2,3 +2,7 @@ node_modules/
 dist/
 sidecar/node_modules/
 *.tgz
+*.env
+*.env.*
+config.json
+.config/

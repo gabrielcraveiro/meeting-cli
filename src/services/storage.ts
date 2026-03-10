@@ -29,7 +29,8 @@ export function parseFrontmatter(content: string): Record<string, string> {
 }
 
 export function extractSection(content: string, heading: string): string {
-  const regex = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`);
+  // Match heading with optional emoji prefix (compat with old notes)
+  const regex = new RegExp(`## (?:[^\\w]*)?${heading}\\n([\\s\\S]*?)(?=\\n## |$)`);
   const match = content.match(regex);
   return match ? match[1].trim() : '';
 }
@@ -47,7 +48,7 @@ export function listMeetings(config: Config): MeetingMeta[] {
     const filePath = path.join(meetingsDir, fileName);
     const content = fs.readFileSync(filePath, 'utf-8');
     const meta = parseFrontmatter(content);
-    const summary = extractSection(content, '🤖 AI Summary');
+    const summary = extractSection(content, 'AI Summary');
 
     return {
       fileName,
@@ -67,11 +68,25 @@ export function loadMeetingContent(config: Config, limit = 10): string[] {
   const meetings = listMeetings(config).slice(0, limit);
   return meetings.map(m => {
     const content = fs.readFileSync(m.filePath, 'utf-8');
-    const transcript = extractSection(content, '📜 Transcription');
-    const summary = extractSection(content, '🤖 AI Summary');
+    const transcript = extractSection(content, 'Transcription');
+    const summary = extractSection(content, 'AI Summary');
     const text = summary && !summary.includes('Generating') ? summary : transcript;
     return `[${m.date} ${m.time}]\n${text}`;
   });
+}
+
+// Lightweight version: only summaries, no transcripts — for context injection
+export function loadMeetingSummaries(config: Config, limit = 5): string[] {
+  const meetings = listMeetings(config).slice(0, limit);
+  const results: string[] = [];
+  for (const m of meetings) {
+    const content = fs.readFileSync(m.filePath, 'utf-8');
+    const summary = extractSection(content, 'AI Summary');
+    if (summary && !summary.includes('Generating')) {
+      results.push(`[${m.date} ${m.time}]\n${summary}`);
+    }
+  }
+  return results;
 }
 
 export async function createMeetingNote(
@@ -103,7 +118,7 @@ type: meeting
 tags: [epharma, meeting]
 date: ${params.date}
 time: ${params.time}
-status: 🟢 Concluído
+status: done
 audio_seconds: ${Math.round(params.durationSec)}
 transcription_model: deepgram
 ai_model: ${params.chatDeployment}
@@ -114,14 +129,14 @@ estimated_cost_usd: ${totalCost}
 ---
 # Meeting Notes: ${params.date} ${params.time}
 
-## 🔊 Audio Recording
+## Audio Recording
 ![[${params.audioPath}]]
 
-## 📜 Transcription
-${params.transcript}
-
-## 🤖 AI Summary
+## AI Summary
 ${params.summary}
+
+## Transcription
+${params.transcript}
 `;
 
   fs.writeFileSync(filePath, content, 'utf-8');

@@ -79,6 +79,14 @@ function flushSegment() {
   const segPath = path.join(OUTPUT_DIR, segName);
   writeWav(segPath, mixed, SAMPLE_RATE, 1);
 
+  // Calculate RMS of mixed audio (full segment, not just first 1000 samples)
+  let sumSq = 0;
+  for (let i = 0; i < len; i++) {
+    sumSq += mixed[i] * mixed[i];
+  }
+  const rms = Math.sqrt(sumSq / len);
+  const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -100;
+
   const peakSys = sysF32.length > 0 ? Math.max(...Array.from(sysF32.slice(0, 1000)).map(Math.abs)) : 0;
   const peakMic = micF32.length > 0 ? Math.max(...Array.from(micF32.slice(0, 1000)).map(Math.abs)) : 0;
   console.log(JSON.stringify({
@@ -87,6 +95,7 @@ function flushSegment() {
     file: segName,
     samples: len,
     durationSec: (len / SAMPLE_RATE).toFixed(1),
+    rmsDb: rmsDb.toFixed(1),
     peakSys: peakSys.toFixed(4),
     peakMic: peakMic.toFixed(4),
   }));

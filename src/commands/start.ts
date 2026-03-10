@@ -3,19 +3,28 @@ import * as path from 'path';
 import * as readline from 'readline';
 import { spawn, ChildProcess } from 'child_process';
 import chalk from 'chalk';
+import { createSpinner } from 'nanospinner';
+import boxen from 'boxen';
+import gradient from 'gradient-string';
 import { requireConfig } from '../config';
-import { transcribeFile } from '../services/transcriber';
+import { transcribeFile, transcribeFull } from '../services/transcriber';
 import { organizeTranscript, chatWithMeetings } from '../services/organizer';
-import { createMeetingNote } from '../services/storage';
+import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
 import { getSidecarCapturePath } from './setup';
 import { getTemplate, listTemplates } from '../services/templates';
 
 const DEEPGRAM_PER_MIN = 0.006;
-const SEGMENT_SECONDS = 10;
-const WARN_SECONDS = 30 * 60;   // 30 min — aviso
-const HARD_STOP_SECONDS = 60 * 60; // 60 min — para automaticamente
+const SEGMENT_SECONDS = 45;
+const WARN_SECONDS = 30 * 60;
+const HARD_STOP_SECONDS = 60 * 60;
+const INSIGHT_INTERVAL_MS = 3 * 60 * 1000;
 
-// WSL ↔ Windows path conversion
+// Silence detection: auto-stop after sustained silence
+const SILENCE_THRESHOLD_DB = -35;           // dB — below this = silence
+const SILENCE_TIMEOUT_SEGMENTS = 4;         // ~3 min of silence (4 × 45s)
+const SILENCE_TRIM_THRESHOLD_DB = -35;      // dB — trim trailing silent segments
+
+// WSL path conversion
 function toWinPath(p: string): string {
   return p.replace(/^\/mnt\/([a-z])\//, (_, d) => `${d.toUpperCase()}:\\`).replace(/\//g, '\\');
 }
@@ -30,13 +39,9 @@ function formatTimestamp(offsetSec: number): string {
   return `[${formatTime(offsetSec)}]`;
 }
 
-// Resolve sidecar path — prefers ~/.config/meeting-cli/sidecar (installed via setup)
 function getSidecarPath(): string {
-  // Primary: installed via `meeting setup`
   const setupPath = getSidecarCapturePath();
   if (fs.existsSync(setupPath)) return setupPath;
-
-  // Fallback: project sidecar directory (dev mode)
   const candidates = [
     path.resolve(__dirname, '..', 'sidecar', 'capture.js'),
     path.resolve(__dirname, '..', '..', 'sidecar', 'capture.js'),
@@ -44,21 +49,15 @@ function getSidecarPath(): string {
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
-
   throw new Error('Sidecar não encontrado. Rode: meeting setup');
 }
 
-// Merge WAV segments into a single WAV file
 function mergeWavSegments(segmentPaths: string[], outputPath: string): void {
   if (segmentPaths.length === 0) return;
-
-  // Read first file to get WAV header params
   const firstBuf = fs.readFileSync(segmentPaths[0]);
   const channels = firstBuf.readUInt16LE(22);
   const sampleRate = firstBuf.readUInt32LE(24);
   const bitsPerSample = firstBuf.readUInt16LE(34);
-
-  // Collect all PCM data (skip 44-byte header from each segment)
   const pcmChunks: Buffer[] = [];
   let totalPcmSize = 0;
   for (const segPath of segmentPaths) {
@@ -67,15 +66,13 @@ function mergeWavSegments(segmentPaths: string[], outputPath: string): void {
     pcmChunks.push(pcm);
     totalPcmSize += pcm.length;
   }
-
-  // Write merged WAV
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
   header.writeUInt32LE(36 + totalPcmSize, 4);
   header.write('WAVE', 8);
   header.write('fmt ', 12);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 20);
   header.writeUInt16LE(channels, 22);
   header.writeUInt32LE(sampleRate, 24);
   header.writeUInt32LE(sampleRate * channels * (bitsPerSample / 8), 28);
@@ -83,29 +80,78 @@ function mergeWavSegments(segmentPaths: string[], outputPath: string): void {
   header.writeUInt16LE(bitsPerSample, 34);
   header.write('data', 36);
   header.writeUInt32LE(totalPcmSize, 40);
-
   fs.writeFileSync(outputPath, Buffer.concat([header, ...pcmChunks]));
 }
+
+// ── Terminal UI (simple flowing output) ──────────────────────────
+// No alt screen, no scroll regions — just normal stdout.
+// Scrollback preserved, scroll/resize safe.
+
+class TerminalUI {
+  init() {}
+
+  drawStatusBar(_time: string, _segments: number, _extra?: string) {
+    // No-op: status is shown inline with appendLine
+  }
+
+  drawInputBar(_hint?: string) {}
+
+  // Print a line — simple, no cursor tricks
+  appendLine(text: string) {
+    console.log(text);
+  }
+
+  // Show a status separator (only when content arrives, not on timer)
+  showStatus(time: string, segments: number) {
+    console.log(chalk.dim(`  ── ${time} | ${segments} seg ──`));
+  }
+
+  teardown() {}
+}
+
+const INSIGHT_PROMPT = `Voce esta acompanhando uma reuniao em tempo real. Analise a transcricao e extraia APENAS os pontos mais importantes.
+
+Formato (exatamente):
+- [decisao] texto curto
+- [acao] texto curto com responsavel se mencionado
+- [ponto] insight ou tema relevante
+- [risco] preocupacao ou blocker mencionado
+
+Regras:
+- Maximo 5 bullets
+- Sem introducao ou conclusao
+- Se nada relevante: (sem pontos relevantes ainda)
+- Portugues`;
 
 export async function cmdStart(opts: { template?: string } = {}): Promise<void> {
   const config = requireConfig();
 
-  // Resolve template
   const templateName = opts.template || 'default';
   const template = getTemplate(templateName);
   if (opts.template && !template) {
-    console.error(chalk.red(`❌ Template "${opts.template}" não encontrado.`));
-    console.log(chalk.gray('Templates disponíveis: ' + listTemplates().map(t => t.name).join(', ')));
+    console.error(chalk.red(`Template "${opts.template}" nao encontrado.`));
+    console.log(chalk.gray('Disponiveis: ' + listTemplates().map(t => t.name).join(', ')));
     process.exit(1);
   }
 
-  // Setup dirs
   const recordingsDir = path.join(config.vaultPath, 'Recordings');
+  fs.mkdirSync(recordingsDir, { recursive: true });
+
+  // Auto-cleanup orphan .tmp-* dirs from crashed sessions
+  try {
+    const orphans = fs.readdirSync(recordingsDir).filter(f => f.startsWith('.tmp-'));
+    for (const d of orphans) {
+      fs.rmSync(path.join(recordingsDir, d), { recursive: true, force: true });
+    }
+    if (orphans.length > 0) {
+      console.log(chalk.gray(`Limpou ${orphans.length} sessao(oes) orfas.`));
+    }
+  } catch {}
+
   const now = new Date();
   const sessionId = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const segmentsDir = path.join(recordingsDir, `.tmp-${sessionId}`);
   fs.mkdirSync(segmentsDir, { recursive: true });
-  fs.mkdirSync(recordingsDir, { recursive: true });
 
   const date = now.toLocaleDateString('sv').slice(0, 10);
   const timeLabel = `${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
@@ -121,35 +167,40 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
   let timerInterval: NodeJS.Timeout | null = null;
   let stopping = false;
   let warned30 = false;
-  let rl: readline.Interface | null = null;
+  let insightInterval: NodeJS.Timeout | null = null;
+  let lastInsightLineCount = 0;
+  let insightBusy = false;
+  let chatBusy = false;
+  let consecutiveSilentSegments = 0;
+  const segmentRmsDb: Map<number, number> = new Map();
 
-  function redrawHeader() {
-    process.stdout.write(`\r${chalk.red('●')} Gravando ${chalk.yellow(formatTime(elapsedSec))} | Ctrl+C para parar  `);
+  const ui = new TerminalUI();
+  const chatHistory: Array<{ role: string; content: string }> = [];
+
+  function showTimestamp() {
+    ui.showStatus(formatTime(elapsedSec), processedSegments.size);
   }
 
   async function transcribeSegment(segPath: string, offsetSec: number): Promise<void> {
     try {
       const stat = fs.statSync(segPath);
-      if (stat.size < 4096) {
-        console.log(chalk.gray(`   ⏭ ${path.basename(segPath)}: muito pequeno (${stat.size}B), pulando`));
-        return;
-      }
+      if (stat.size < 4096) return;
 
-      process.stdout.write(`\n${chalk.gray(`   🎤 Transcrevendo ${path.basename(segPath)} (${(stat.size / 1024).toFixed(1)}KB)...`)}`);
-      redrawHeader();
+      ui.appendLine(chalk.gray(`  transcrevendo ${path.basename(segPath)}...`));
       const text = await transcribeFile(segPath, config);
-      if (!text) {
-        process.stdout.write(`\n${chalk.yellow(`   ⚠ ${path.basename(segPath)}: transcript vazio`)}`);
-        redrawHeader();
-        return;
-      }
+      if (!text) return;
 
       const line = `${formatTimestamp(offsetSec)} ${text}`;
       transcriptLines.push(line);
-      process.stdout.write('\n' + chalk.cyan(line));
-      redrawHeader();
+
+      // Show each speaker line separately for readability
+      for (const speakerLine of text.split('\n')) {
+        if (speakerLine.trim()) {
+          ui.appendLine(chalk.cyan(`  ${formatTimestamp(offsetSec)} `) + speakerLine.trim());
+        }
+      }
     } catch (err) {
-      process.stderr.write(`\n${chalk.yellow('⚠ Segmento falhou:')} ${(err as Error).message}`);
+      ui.appendLine(chalk.yellow(`  segmento falhou: ${(err as Error).message}`));
     }
   }
 
@@ -158,17 +209,106 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       const files = fs.readdirSync(segmentsDir)
         .filter(f => f.endsWith('.wav') && f.startsWith('seg_'))
         .sort();
-
-      // Process all segments except the last (may still be writing)
       for (let i = 0; i < files.length - 1; i++) {
         const seg = files[i];
         if (!processedSegments.has(seg)) {
           processedSegments.add(seg);
           const segIndex = parseInt(seg.replace('seg_', '').replace('.wav', ''));
           await transcribeSegment(path.join(segmentsDir, seg), segIndex * SEGMENT_SECONDS);
+          showTimestamp();
         }
       }
     }, 2000);
+  }
+
+  async function runAutoInsight() {
+    if (insightBusy || chatBusy || stopping) return;
+    if (transcriptLines.length <= lastInsightLineCount) return;
+    if (transcriptLines.length < 3) return;
+
+    insightBusy = true;
+    const currentTranscript = transcriptLines.join('\n');
+    lastInsightLineCount = transcriptLines.length;
+
+    try {
+      const messages = [
+        { role: 'system', content: INSIGHT_PROMPT },
+        { role: 'user', content: currentTranscript },
+      ];
+      const response = await chatWithMeetings(messages, config);
+
+      if (response.includes('sem pontos relevantes')) {
+        insightBusy = false;
+        return;
+      }
+
+      ui.appendLine('');
+      ui.appendLine(chalk.gray('  ─────────────────────────────────────────'));
+      ui.appendLine(chalk.bold.magenta('  Insights') + chalk.gray(` (${formatTime(elapsedSec)})`));
+
+      for (const line of response.split('\n')) {
+        const t = line.trim();
+        if (!t || t === '-') continue;
+        if (t.includes('[decisao]')) {
+          ui.appendLine(chalk.green('  ' + t));
+        } else if (t.includes('[acao]')) {
+          ui.appendLine(chalk.cyan('  ' + t));
+        } else if (t.includes('[risco]')) {
+          ui.appendLine(chalk.red('  ' + t));
+        } else if (t.includes('[ponto]')) {
+          ui.appendLine(chalk.white('  ' + t));
+        } else {
+          ui.appendLine(chalk.gray('  ' + t));
+        }
+      }
+      ui.appendLine(chalk.gray('  ─────────────────────────────────────────'));
+      ui.appendLine('');
+    } catch {
+      // insights are optional
+    }
+
+    insightBusy = false;
+  }
+
+  // Retroactive trim: calculate RMS from WAV file and strip silent trailing segments
+  function calcWavRmsDb(wavPath: string): number {
+    const buf = fs.readFileSync(wavPath);
+    const pcm = new Int16Array(buf.buffer, buf.byteOffset + 44, (buf.length - 44) / 2);
+    if (pcm.length === 0) return -100;
+    let sumSq = 0;
+    for (let i = 0; i < pcm.length; i++) {
+      const s = pcm[i] / 32768;
+      sumSq += s * s;
+    }
+    const rms = Math.sqrt(sumSq / pcm.length);
+    return rms > 0 ? 20 * Math.log10(rms) : -100;
+  }
+
+  function trimSilentTrailing(segFiles: string[]): { kept: string[]; trimmed: number } {
+    let trimCount = 0;
+    const files = [...segFiles];
+
+    // Trim from the end
+    while (files.length > 1) {
+      const last = files[files.length - 1];
+      const segPath = path.join(segmentsDir, last);
+
+      // Prefer sidecar RMS if available, else calculate from file
+      const idx = parseInt(last.replace('seg_', '').replace('.wav', ''));
+      let rmsDb = segmentRmsDb.get(idx);
+      if (rmsDb === undefined) {
+        rmsDb = calcWavRmsDb(segPath);
+      }
+
+      if (rmsDb < SILENCE_TRIM_THRESHOLD_DB) {
+        files.pop();
+        trimCount++;
+      } else {
+        break;
+      }
+    }
+
+    return { kept: files, trimmed: trimCount };
   }
 
   async function finalize(durationSec: number) {
@@ -177,54 +317,95 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
 
     if (pollInterval) clearInterval(pollInterval);
     if (timerInterval) clearInterval(timerInterval);
+    if (insightInterval) clearInterval(insightInterval);
 
-    process.stdout.write('\n\n');
-    console.log(chalk.blue('⏳ Finalizando transcrição...'));
+    // Exit alternate screen for finalization output
+    ui.teardown();
 
+    console.log('\n' + chalk.bold('Finalizando...'));
+
+    // 1. Retroactive trim: remove silent trailing segments
     const allFiles = fs.readdirSync(segmentsDir)
       .filter(f => f.endsWith('.wav') && f.startsWith('seg_'))
       .sort();
-    console.log(chalk.gray(`   Segmentos encontrados: ${allFiles.length}`));
 
-    // Transcribe remaining segments
-    const remaining = allFiles.filter(f => !processedSegments.has(f));
-    for (const seg of remaining) {
-      processedSegments.add(seg);
-      const segIndex = parseInt(seg.replace('seg_', '').replace('.wav', ''));
-      await transcribeSegment(path.join(segmentsDir, seg), segIndex * SEGMENT_SECONDS);
+    const { kept: keptFiles, trimmed: trimmedCount } = trimSilentTrailing(allFiles);
+    if (trimmedCount > 0) {
+      const trimmedSec = trimmedCount * SEGMENT_SECONDS;
+      console.log(chalk.yellow(`  Trimmed ${trimmedCount} segmento(s) silencioso(s) do final (~${Math.round(trimmedSec / 60)} min)`));
+      durationSec = Math.max(0, durationSec - trimmedSec);
     }
+    console.log(chalk.gray(`  ${keptFiles.length} segmentos (${allFiles.length - keptFiles.length} removidos)`));
 
-    // Merge segments into final recording
-    console.log(chalk.blue('🔗 Juntando segmentos...'));
+    let s = createSpinner('Juntando segmentos...').start();
     try {
-      const allSegPaths = allFiles.map(f => path.join(segmentsDir, f));
+      const allSegPaths = keptFiles.map(f => path.join(segmentsDir, f));
       if (allSegPaths.length > 0) {
         mergeWavSegments(allSegPaths, finalAudioPath);
-        console.log(chalk.gray(`   Áudio salvo: ${finalAudioName} (${(fs.statSync(finalAudioPath).size / 1024 / 1024).toFixed(1)}MB)`));
+        s.success({ text: `Audio: ${finalAudioName} (${(fs.statSync(finalAudioPath).size / 1024 / 1024).toFixed(1)}MB)` });
+      } else {
+        s.warn({ text: 'Nenhum segmento para juntar' });
       }
     } catch (err) {
-      console.warn(chalk.yellow(`⚠ Merge falhou: ${(err as Error).message}`));
+      s.error({ text: `Merge falhou: ${(err as Error).message}` });
     }
 
-    const fullTranscript = transcriptLines.join('\n');
+    // 2. Re-transcribe full audio with nova-3 + diarization + speaker names
+    let fullTranscript = transcriptLines.join('\n'); // fallback: live segments
+
+    if (fs.existsSync(finalAudioPath)) {
+      s = createSpinner('Re-transcrevendo com nova-3 + diarizacao...').start();
+      try {
+        const fullText = await transcribeFull(finalAudioPath, config);
+        if (fullText.trim()) {
+          fullTranscript = fullText;
+          s.success({ text: `Transcricao final: ${fullText.split('\n').length} linhas com diarizacao` });
+        } else {
+          s.warn({ text: 'Re-transcricao vazia, usando segmentos' });
+        }
+      } catch (err) {
+        s.warn({ text: `Re-transcricao falhou, usando segmentos: ${(err as Error).message}` });
+      }
+    }
 
     if (!fullTranscript.trim()) {
-      console.log(chalk.yellow('⚠ Transcrição vazia — nota não criada.'));
+      console.log(chalk.yellow('Transcricao vazia — nota nao criada.'));
       cleanup(segmentsDir);
       return;
     }
 
-    // Organize with AI (use template prompt if specified)
-    const templateLabel = template ? ` (${template.label})` : '';
-    console.log(chalk.blue(`🤖 Organizando com IA${templateLabel}...`));
+    // Smart template detection
+    let effectiveTemplate = template;
+    if (!effectiveTemplate || effectiveTemplate.name === 'default') {
+      const sd = createSpinner('Detectando tipo de reuniao...').start();
+      try {
+        const detectMessages = [
+          { role: 'system', content: 'Analise esta transcricao e responda com UMA UNICA PALAVRA: daily, 1on1, retro, planning, technical, ou default. Nenhuma outra palavra.' },
+          { role: 'user', content: fullTranscript.slice(0, 2000) },
+        ];
+        const detected = (await chatWithMeetings(detectMessages, config)).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const detectedTemplate = getTemplate(detected);
+        if (detectedTemplate && detectedTemplate.name !== 'default') {
+          effectiveTemplate = detectedTemplate;
+          sd.success({ text: `Tipo: ${detectedTemplate.label}` });
+        } else {
+          sd.success({ text: 'Tipo: geral' });
+        }
+      } catch {
+        sd.warn({ text: 'Deteccao falhou, usando template padrao' });
+      }
+    }
+
+    const templateLabel = effectiveTemplate && effectiveTemplate.name !== 'default' ? ` ${effectiveTemplate.label}` : '';
+    s = createSpinner(`Organizando com IA${templateLabel}...`).start();
     let summary = '';
     let chatCost = 0;
     let inputTokens = 0;
     let outputTokens = 0;
     let totalTokens = 0;
 
-    const configWithPrompt = template
-      ? { ...config, organizationPrompt: template.prompt }
+    const configWithPrompt = effectiveTemplate && effectiveTemplate.name !== 'default'
+      ? { ...config, organizationPrompt: effectiveTemplate.prompt }
       : config;
 
     try {
@@ -234,14 +415,16 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       inputTokens = result.inputTokens;
       outputTokens = result.outputTokens;
       totalTokens = result.totalTokens;
+      s.success({ text: `IA: ${totalTokens} tokens` });
     } catch (err) {
-      console.warn(chalk.yellow(`⚠ IA falhou: ${(err as Error).message}`));
-      summary = '> Organização automática falhou.';
+      s.error({ text: `IA falhou: ${(err as Error).message}` });
+      summary = '> Organizacao automatica falhou.';
     }
 
     const deepgramCost = (durationSec / 60) * DEEPGRAM_PER_MIN;
     const noteTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
+    s = createSpinner('Salvando nota...').start();
     const notePath = await createMeetingNote(config, {
       transcript: fullTranscript,
       summary,
@@ -256,30 +439,49 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       date,
       time: noteTime,
     });
+    s.success({ text: path.basename(notePath) });
 
     cleanup(segmentsDir);
 
     const totalCost = (deepgramCost + chatCost).toFixed(4);
-    console.log(chalk.green(`\n✅ Reunião salva: ${path.basename(notePath)}`));
-    console.log(chalk.gray(`   Duração: ${formatTime(Math.round(durationSec))} | Custo: $${totalCost}`));
+    console.log('\n' + boxen(
+      `${chalk.bold('Reuniao salva')}\n\n` +
+      `${chalk.gray('Nota:')}     ${path.basename(notePath)}\n` +
+      `${chalk.gray('Duracao:')}  ${formatTime(Math.round(durationSec))}\n` +
+      `${chalk.gray('Custo:')}    $${totalCost}\n` +
+      `${chalk.gray('Audio:')}    ${finalAudioName}`,
+      {
+        padding: 1,
+        margin: { top: 0, bottom: 1, left: 2, right: 0 },
+        borderStyle: 'round',
+        borderColor: 'green',
+      }
+    ));
   }
 
   function cleanup(dir: string) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {}
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 
-  // Resolve sidecar
+  function cleanupAndExit(code = 0) {
+    if (pollInterval) clearInterval(pollInterval);
+    if (timerInterval) clearInterval(timerInterval);
+    if (insightInterval) clearInterval(insightInterval);
+    try { rl?.close(); } catch {}
+    ui.teardown();
+    cleanup(segmentsDir);
+    process.exit(code);
+  }
+
+  // ── Resolve sidecar ──
   let sidecarWslPath: string;
   try {
     sidecarWslPath = getSidecarPath();
   } catch (err) {
-    console.error(chalk.red(`❌ ${(err as Error).message}`));
+    console.error(chalk.red(`${(err as Error).message}`));
     process.exit(1);
   }
 
-  // node.exe needs Windows-style paths
   const sidecarWinPath = toWinPath(sidecarWslPath);
   const segmentsDirWin = toWinPath(segmentsDir);
 
@@ -295,63 +497,97 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     captureArgs.push('--mic-device', config.micDeviceId);
   }
 
-  console.log(chalk.bold('\n🎙  Meeting CLI — Gravação (WASAPI)\n'));
+  // ── Init UI ──
+  console.log('\n' + gradient(['#ff6b6b', '#ffd93d', '#6bcb77'])('  Meeting CLI') + chalk.gray(' v1.1.0'));
+  console.log(chalk.gray('  /stop = parar  |  /help = comandos  |  digite = chat ao vivo\n'));
+  ui.init();
+
   if (template && template.name !== 'default') {
-    console.log(chalk.magenta(`Template: ${template.label} — ${template.description}`));
+    ui.appendLine(chalk.magenta(`  Template: ${template.label}`));
   }
-  console.log(chalk.gray(`Sidecar: ${sidecarWinPath}`));
-  console.log(chalk.gray(`Segmentos: ${segmentsDir}`));
-  console.log(chalk.gray(`Áudio final: ${finalAudioPath}`));
-  console.log(chalk.gray(`\nDigite uma pergunta para chat ao vivo com IA | /stop para parar | /help\n`));
+
+  // Meeting briefing
+  try {
+    const recentMeetings = loadMeetingSummaries(config, 3);
+    if (recentMeetings.length > 0) {
+      const briefingLines: string[] = [];
+      for (const m of recentMeetings) {
+        const firstLine = m.split('\n')[0];
+        const preview = m.split('\n').slice(1, 3).join(' ').slice(0, 80);
+        briefingLines.push(`${chalk.white(firstLine)}`);
+        if (preview.trim()) briefingLines.push(`${chalk.gray(preview)}...`);
+      }
+      console.log(boxen(briefingLines.join('\n'), {
+        title: 'Briefing',
+        titleAlignment: 'left',
+        padding: { top: 0, bottom: 0, left: 1, right: 1 },
+        margin: { top: 0, bottom: 0, left: 2, right: 0 },
+        borderStyle: 'round',
+        borderColor: 'gray',
+        dimBorder: true,
+      }));
+    }
+  } catch {}
+
+  ui.appendLine('');
+  ui.appendLine(chalk.gray('  Iniciando captura WASAPI...'));
+  ui.appendLine('');
 
   captureProcess = spawn(nodeExe, captureArgs);
   const startTime = Date.now();
 
-  // Parse JSON events from sidecar stdout
+  // Suppress EPIPE errors when sidecar stdin closes before we write
+  captureProcess.stdin?.on('error', () => {});
+
+  // Parse sidecar JSON events
   let stdoutBuffer = '';
   captureProcess.stdout?.on('data', (data: Buffer) => {
     stdoutBuffer += data.toString();
     const lines = stdoutBuffer.split('\n');
     stdoutBuffer = lines.pop() || '';
-
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
         const evt = JSON.parse(line);
-        if (evt.event === 'segment') {
-          process.stdout.write(`\n${chalk.gray(`   📦 Segmento ${evt.index}: ${evt.durationSec}s | sys=${evt.peakSys} mic=${evt.peakMic}`)}`);
-          redrawHeader();
+        if (evt.event === 'started') {
+          ui.appendLine(chalk.green('  Captura WASAPI iniciada'));
+        } else if (evt.event === 'segment') {
+          // Track RMS for silence detection + retroactive trim
+          const rmsDb = parseFloat(evt.rmsDb);
+          segmentRmsDb.set(evt.index, rmsDb);
+
+          if (rmsDb < SILENCE_THRESHOLD_DB) {
+            consecutiveSilentSegments++;
+            if (consecutiveSilentSegments >= SILENCE_TIMEOUT_SEGMENTS && !stopping) {
+              const silenceMin = Math.round(consecutiveSilentSegments * SEGMENT_SECONDS / 60);
+              ui.appendLine(chalk.yellow(`  ${silenceMin} min de silencio detectado — parando automaticamente`));
+              userRequestedStop = true;
+              try { captureProcess?.stdin?.write('q\n'); } catch {}
+              setTimeout(() => {
+                if (captureProcess && !stopping) captureProcess.kill('SIGINT');
+              }, 2000);
+            }
+          } else {
+            consecutiveSilentSegments = 0;
+          }
         } else if (evt.event === 'error') {
-          process.stdout.write(`\n${chalk.yellow(`   ⚠ ${evt.source}: ${evt.message}`)}`);
-          redrawHeader();
-        } else if (evt.event === 'started') {
-          process.stdout.write(`\n${chalk.green('   ✓ Captura WASAPI iniciada')}`);
-          redrawHeader();
+          ui.appendLine(chalk.yellow(`  ${evt.source}: ${evt.message}`));
         } else if (evt.event === 'stopped') {
-          process.stdout.write(`\n${chalk.gray(`   Captura encerrada: ${evt.totalSegments} segmentos`)}`);
+          ui.appendLine(chalk.gray(`  Captura encerrada: ${evt.totalSegments} segmentos`));
         }
-      } catch {
-        // Non-JSON output, ignore
-      }
+      } catch {}
     }
   });
 
   captureProcess.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString().trim();
-    if (msg) console.error(chalk.gray(`   [sidecar] ${msg}`));
+    if (msg) ui.appendLine(chalk.gray(`  [sidecar] ${msg}`));
   });
 
-  function cleanupAndExit(code = 0) {
-    if (pollInterval) clearInterval(pollInterval);
-    if (timerInterval) clearInterval(timerInterval);
-    try { rl?.close(); } catch {}
-    cleanup(segmentsDir);
-    process.exit(code);
-  }
-
   captureProcess.on('error', (err) => {
-    console.error(chalk.red(`\n❌ Sidecar falhou: ${err.message}`));
-    console.error(chalk.gray('   Verifique se node.exe (Windows) está no PATH.'));
+    ui.teardown();
+    console.error(chalk.red(`Sidecar falhou: ${err.message}`));
+    console.error(chalk.gray('Verifique se node.exe (Windows) esta no PATH.'));
     cleanupAndExit(1);
   });
 
@@ -362,24 +598,23 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       await finalize(durationSec);
       cleanupAndExit(0);
     } else {
-      console.error(chalk.red(`\n❌ Sidecar saiu com código ${code}`));
+      ui.teardown();
+      console.error(chalk.red(`Sidecar saiu com codigo ${code}`));
       cleanupAndExit(1);
     }
   });
 
-  // Timer with 30min warning and 60min hard stop
+  // Timer — status bar update + safety limits
   timerInterval = setInterval(() => {
     elapsedSec = Math.floor((Date.now() - startTime) / 1000);
 
-    // 30 min warning
     if (!warned30 && elapsedSec >= WARN_SECONDS) {
       warned30 = true;
-      process.stdout.write(`\n${chalk.bgYellow.black(' ⚠ 30 minutos de gravação! Ctrl+C para parar. Auto-stop em 30 min. ')}`);
+      ui.appendLine(chalk.yellow('  30 minutos de gravacao. Auto-stop em 30 min.'));
     }
 
-    // 60 min hard stop
     if (elapsedSec >= HARD_STOP_SECONDS && captureProcess && !stopping) {
-      process.stdout.write(`\n${chalk.bgRed.white(' ⏹ 60 minutos — parando gravação automaticamente ')}`);
+      ui.appendLine(chalk.red('  60 minutos — parando automaticamente'));
       userRequestedStop = true;
       try { captureProcess.stdin?.write('q\n'); } catch {}
       setTimeout(() => {
@@ -388,78 +623,142 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       return;
     }
 
-    redrawHeader();
   }, 1000);
 
   startPolling();
-  redrawHeader();
 
-  // Live chat during recording
-  const chatHistory: Array<{ role: string; content: string }> = [];
-  let chatBusy = false;
+  // Auto-insights: first at 2min, then every 3min
+  setTimeout(() => {
+    runAutoInsight();
+    insightInterval = setInterval(runAutoInsight, INSIGHT_INTERVAL_MS);
+  }, 2 * 60 * 1000);
 
-  rl = readline.createInterface({
+  // ── Readline for chat ──
+  let rl: readline.Interface | null = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
     prompt: '',
   });
 
-  // Suppress default readline output during recording
-  rl.on('line', async (input: string) => {
-    const text = input.trim();
-    if (!text) {
-      redrawHeader();
-      return;
+  // Context system: auto-loaded + user-added via /ctx
+  const extraContext: string[] = [];
+
+  // Auto-load recent meeting summaries as context
+  try {
+    const recentMeetings = loadMeetingSummaries(config, 5);
+    if (recentMeetings.length > 0) {
+      extraContext.push('# Reunioes recentes\n' + recentMeetings.join('\n---\n'));
+    }
+  } catch {}
+
+  function buildSystemMsg(): string {
+    const currentTranscript = transcriptLines.join('\n');
+    let msg = 'Voce e um assistente em tempo real durante uma reuniao. Responda em portugues, de forma concisa e direta.\n\n';
+
+    if (extraContext.length > 0) {
+      msg += '# Contexto adicional\n' + extraContext.join('\n\n') + '\n\n';
     }
 
-    if (text === '/stop' || text === '/parar') {
+    if (currentTranscript.trim()) {
+      msg += '# Transcricao da reuniao em andamento\n' + currentTranscript + '\n\n';
+    }
+
+    msg += 'Responda baseado na transcricao e no contexto. Se a informacao nao esta disponivel, diga isso.';
+    return msg;
+  }
+
+  rl.on('line', async (input: string) => {
+    const text = input.trim();
+    if (!text) return;
+
+    const cmd = text.replace(/^\/+/, '').toLowerCase();
+
+    if (cmd === 'stop' || cmd === 'parar') {
       userRequestedStop = true;
+      ui.appendLine(chalk.blue('  Parando gravacao... aguarde a finalizacao.'));
       if (captureProcess && !stopping) {
         try { captureProcess.stdin?.write('q\n'); } catch {}
         setTimeout(() => {
           if (captureProcess && !stopping) captureProcess.kill('SIGINT');
-          setTimeout(() => process.exit(0), 2000);
-        }, 2000);
+        }, 3000);
       }
       return;
     }
 
-    if (text === '/help') {
-      process.stdout.write('\n' + chalk.gray('  /stop     — para a gravação'));
-      process.stdout.write('\n' + chalk.gray('  /help     — mostra comandos'));
-      process.stdout.write('\n' + chalk.gray('  <texto>   — pergunta à IA sobre a reunião em andamento\n'));
-      redrawHeader();
+    if (cmd === 'help' || cmd === 'ajuda') {
+      ui.appendLine(chalk.gray('  /stop          — para a gravacao'));
+      ui.appendLine(chalk.gray('  /ctx <arquivo> — adiciona arquivo do vault como contexto'));
+      ui.appendLine(chalk.gray('  /ctx <texto>   — adiciona texto livre como contexto'));
+      ui.appendLine(chalk.gray('  /contexto      — mostra contextos carregados'));
+      ui.appendLine(chalk.gray('  /help          — mostra comandos'));
+      ui.appendLine(chalk.gray('  <texto>        — pergunta a IA sobre a reuniao'));
+      return;
+    }
+
+    // /ctx command — add context from file or free text
+    if (cmd.startsWith('ctx ') || cmd.startsWith('contexto ')) {
+      const arg = text.replace(/^\/+\w+\s+/, '').trim();
+      if (!arg) {
+        ui.appendLine(chalk.yellow('  Uso: /ctx <arquivo.md> ou /ctx <texto livre>'));
+        return;
+      }
+
+      // Try to load as file from vault
+      const candidates = [
+        path.join(config.vaultPath, arg),
+        path.join(config.vaultPath, arg + '.md'),
+        path.resolve(arg),
+      ];
+      let loaded = false;
+      for (const filePath of candidates) {
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+          try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const preview = content.slice(0, 200).replace(/\n/g, ' ');
+            extraContext.push(`# ${path.basename(filePath)}\n${content}`);
+            ui.appendLine(chalk.green(`  + ${path.basename(filePath)} adicionado ao contexto`));
+            ui.appendLine(chalk.gray(`    ${preview}...`));
+            loaded = true;
+            break;
+          } catch {}
+        }
+      }
+
+      if (!loaded) {
+        // Treat as free text context
+        extraContext.push(`# Nota do usuario\n${arg}`);
+        ui.appendLine(chalk.green(`  + Contexto adicionado: "${arg.slice(0, 60)}${arg.length > 60 ? '...' : ''}"`));
+      }
+      return;
+    }
+
+    // /contexto — show loaded contexts
+    if (cmd === 'contexto' || cmd === 'context') {
+      if (extraContext.length === 0) {
+        ui.appendLine(chalk.gray('  Nenhum contexto extra carregado.'));
+      } else {
+        ui.appendLine(chalk.bold(`  ${extraContext.length} contexto(s) carregado(s):`));
+        for (const ctx of extraContext) {
+          const firstLine = ctx.split('\n')[0].replace(/^# /, '');
+          ui.appendLine(chalk.gray(`    - ${firstLine}`));
+        }
+      }
       return;
     }
 
     if (chatBusy) {
-      process.stdout.write('\n' + chalk.yellow('  ⏳ Aguarde a resposta anterior...\n'));
-      redrawHeader();
+      ui.appendLine(chalk.yellow('  Aguarde a resposta anterior...'));
       return;
     }
 
     chatBusy = true;
-    const currentTranscript = transcriptLines.join('\n');
 
-    if (!currentTranscript.trim()) {
-      process.stdout.write('\n' + chalk.yellow('  ⚠ Ainda sem transcrição para contexto.\n'));
-      chatBusy = false;
-      redrawHeader();
-      return;
-    }
-
-    process.stdout.write('\n' + chalk.gray('  🤖 Pensando...'));
-
-    const systemMsg = `Você é um assistente em tempo real durante uma reunião. Responda em português, de forma concisa e direta.
-Aqui está a transcrição parcial da reunião em andamento:
-
-${currentTranscript}
-
-Responda a pergunta do usuário baseado nesta transcrição. Se a informação não estiver na transcrição, diga isso.`;
+    ui.appendLine(chalk.bold.blue('  > ') + chalk.white(text));
+    ui.appendLine(chalk.gray('  pensando...'));
 
     const messages = [
-      { role: 'system', content: systemMsg },
+      { role: 'system', content: buildSystemMsg() },
       ...chatHistory,
       { role: 'user', content: text },
     ];
@@ -468,40 +767,36 @@ Responda a pergunta do usuário baseado nesta transcrição. Se a informação n
       const response = await chatWithMeetings(messages, config);
       chatHistory.push({ role: 'user', content: text });
       chatHistory.push({ role: 'assistant', content: response });
+      while (chatHistory.length > 20) chatHistory.shift();
 
-      // Keep chat history manageable (last 10 exchanges)
-      while (chatHistory.length > 20) {
-        chatHistory.shift();
+      for (const rline of response.split('\n')) {
+        if (rline.trim()) {
+          ui.appendLine(chalk.blue('    ') + rline);
+        }
       }
-
-      process.stdout.write('\r\x1b[K'); // clear "Pensando..."
-      process.stdout.write('\n' + chalk.bold.blue('  💬 ') + chalk.white(text));
-      process.stdout.write('\n' + chalk.blue('  🤖 ') + response.split('\n').join('\n     '));
-      process.stdout.write('\n');
+      ui.appendLine('');
     } catch (err) {
-      process.stdout.write('\n' + chalk.red(`  ❌ ${(err as Error).message}\n`));
+      ui.appendLine(chalk.red(`  Erro: ${(err as Error).message}`));
     }
 
     chatBusy = false;
-    redrawHeader();
   });
 
-  // Ctrl+C handler
+  // Ctrl+C — graceful shutdown
   process.on('SIGINT', () => {
+    if (userRequestedStop) {
+      cleanupAndExit(1);
+    }
     userRequestedStop = true;
+    ui.appendLine(chalk.blue('  Parando gravacao... aguarde a finalizacao.'));
+    ui.drawInputBar(' Finalizando...');
     if (captureProcess && !stopping) {
-      // Send 'q' to sidecar stdin (same as ffmpeg convention)
       try { captureProcess.stdin?.write('q\n'); } catch {}
       setTimeout(() => {
-        if (captureProcess && !stopping) {
-          captureProcess.kill('SIGINT');
-        }
-        setTimeout(() => process.exit(0), 2000);
-      }, 2000);
+        if (captureProcess && !stopping) captureProcess.kill('SIGINT');
+      }, 3000);
     } else {
-      if (pollInterval) clearInterval(pollInterval);
-      if (timerInterval) clearInterval(timerInterval);
-      process.exit(0);
+      cleanupAndExit(0);
     }
   });
 }

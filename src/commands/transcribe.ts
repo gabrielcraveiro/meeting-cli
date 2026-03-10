@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
 import { requireConfig } from '../config';
-import { transcribeFile } from '../services/transcriber';
+import { transcribeFull } from '../services/transcriber';
 import { organizeTranscript } from '../services/organizer';
 import { createMeetingNote } from '../services/storage';
 import { getTemplate } from '../services/templates';
@@ -24,7 +24,7 @@ export async function cmdTranscribe(filePath: string, opts: { template?: string;
 
   // Transcribe
   console.log(chalk.blue('\n⏳ Transcrevendo com Deepgram...'));
-  const transcript = await transcribeFile(absPath, config);
+  const transcript = await transcribeFull(absPath, config);
 
   if (!transcript.trim()) {
     console.log(chalk.yellow('⚠ Transcrição vazia — nenhuma fala detectada.'));

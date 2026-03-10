@@ -17,7 +17,9 @@ export interface Config {
   chatApiKey: string;
   chatModel: string;
   organizationPrompt: string;
-  // Legacy (kept for backward compat, not used)
+  // Speaker name mapping: { "0": "Gabriel", "1": "Ana" }
+  speakerNames?: Record<string, string>;
+  // Legacy
   ffmpegPath?: string;
   audioBackend?: string;
   ffmpegMicDevice?: string;

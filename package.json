@@ -1,18 +1,35 @@
 {
-  "name": "meeting-cli",
-  "version": "1.0.0",
-  "description": "CLI for recording, transcribing and chatting with meeting notes",
+  "name": "@gabrielcraveiro/meeting-cli",
+  "version": "1.2.0",
+  "description": "CLI tool for recording, transcribing, and organizing meeting notes with AI — live chat, auto-insights, and Obsidian integration",
+  "author": "Gabriel Craveiro",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gabrielcraveiro/meeting-cli.git"
+  },
+  "keywords": ["meeting", "transcription", "cli", "deepgram", "obsidian", "ai", "wasapi"],
   "bin": {
     "meeting": "dist/cli.js"
   },
+  "files": [
+    "dist/",
+    "sidecar/",
+    "install.sh",
+    "README.md"
+  ],
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs",
+    "prepublishOnly": "npm run build",
     "install-global": "npm run build && npm install -g ."
   },
   "dependencies": {
+    "boxen": "^7.1.1",
     "chalk": "^4.1.2",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "gradient-string": "^3.0.0",
+    "nanospinner": "^1.2.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

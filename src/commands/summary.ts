@@ -33,8 +33,8 @@ export function cmdSummary(options: { limit?: string; raw?: boolean }): void {
     console.log(chalk.bold.blue(divider));
 
     const content = fs.readFileSync(m.filePath, 'utf-8');
-    const summary = extractSection(content, '🤖 AI Summary');
-    const transcript = extractSection(content, '📜 Transcription');
+    const summary = extractSection(content, 'AI Summary');
+    const transcript = extractSection(content, 'Transcription');
 
     if (summary && !summary.includes('Generating summary')) {
       if (options.raw) {
