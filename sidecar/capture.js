@@ -68,21 +68,26 @@ function flushSegment() {
   const len = Math.max(sysF32.length, micF32.length);
   if (len === 0) return;
 
-  const mixed = new Float32Array(len);
+  // Stereo interleaved: L=system (remote), R=mic (local)
+  const stereo = new Float32Array(len * 2);
   for (let i = 0; i < len; i++) {
     const s = i < sysF32.length ? sysF32[i] : 0;
     const m = i < micF32.length ? micF32[i] * MIC_GAIN : 0;
-    mixed[i] = Math.max(-1, Math.min(1, s + m));
+    stereo[i * 2] = Math.max(-1, Math.min(1, s));     // L = system
+    stereo[i * 2 + 1] = Math.max(-1, Math.min(1, m)); // R = mic
   }
 
   const segName = `seg_${String(segIndex).padStart(3, '0')}.wav`;
   const segPath = path.join(OUTPUT_DIR, segName);
-  writeWav(segPath, mixed, SAMPLE_RATE, 1);
+  writeWav(segPath, stereo, SAMPLE_RATE, 2);
 
-  // Calculate RMS of mixed audio (full segment, not just first 1000 samples)
+  // Calculate RMS from both channels combined (for silence detection)
   let sumSq = 0;
   for (let i = 0; i < len; i++) {
-    sumSq += mixed[i] * mixed[i];
+    const s = i < sysF32.length ? sysF32[i] : 0;
+    const m = i < micF32.length ? micF32[i] * MIC_GAIN : 0;
+    const mixed = s + m;
+    sumSq += mixed * mixed;
   }
   const rms = Math.sqrt(sumSq / len);
   const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -100;

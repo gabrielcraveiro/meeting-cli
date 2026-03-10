@@ -138,20 +138,72 @@ export async function transcribeFull(filePath: string, config: Config): Promise<
   const audioBuffer = fs.readFileSync(filePath);
   const contentType = detectContentType(filePath);
 
+  // Detect if audio is stereo (multichannel: L=system/remote, R=mic/local)
+  const channels = audioBuffer.readUInt16LE(22); // WAV header: offset 22 = numChannels
+  const isStereo = channels === 2;
+
   const params = new URLSearchParams({
     model: 'nova-3',
-    diarize: 'true',
-    diarize_version: '2024-11-01',
-    utterances: 'true',
     punctuate: 'true',
     smart_format: 'true',
     language: 'pt',
   });
 
+  if (isStereo) {
+    // Multichannel mode: Deepgram processes each channel independently
+    // Channel 0 = system audio (remote participants)
+    // Channel 1 = mic audio (local user)
+    params.set('multichannel', 'true');
+  } else {
+    // Mono fallback: use diarization to separate speakers
+    params.set('diarize', 'true');
+    params.set('diarize_version', '2024-11-01');
+    params.set('utterances', 'true');
+  }
+
   const data = await callDeepgram(audioBuffer, contentType, params, config);
 
   let text: string;
-  if (data.results.utterances && data.results.utterances.length > 0) {
+  if (isStereo && data.results.channels && data.results.channels.length >= 2) {
+    // Multichannel: merge both channels with speaker labels
+    const remoteText = data.results.channels[0]?.alternatives?.[0]?.transcript?.trim() || '';
+    const localText = data.results.channels[1]?.alternatives?.[0]?.transcript?.trim() || '';
+
+    // Get word-level data for proper interleaving by timestamp
+    const remoteWords = data.results.channels[0]?.alternatives?.[0]?.words || [];
+    const localWords = data.results.channels[1]?.alternatives?.[0]?.words || [];
+
+    // Build utterances from word groups, interleaved by time
+    const allWords = [
+      ...remoteWords.map((w: DeepgramWord) => ({ ...w, channel: 0 })),
+      ...localWords.map((w: DeepgramWord) => ({ ...w, channel: 1 })),
+    ].sort((a, b) => a.start - b.start);
+
+    // Group consecutive words from same channel
+    const lines: string[] = [];
+    let currentChannel = -1;
+    let currentWords: string[] = [];
+    const localSpeaker = config.speakerNames?.['Speaker 1'] || config.speakerNames?.['local'] || 'Voce';
+    const remoteSpeaker = '[Remoto]';
+
+    for (const w of allWords) {
+      if (w.channel !== currentChannel) {
+        if (currentWords.length > 0) {
+          const label = currentChannel === 1 ? `[${localSpeaker}]` : remoteSpeaker;
+          lines.push(`${label} ${currentWords.join(' ')}`);
+        }
+        currentChannel = w.channel;
+        currentWords = [];
+      }
+      currentWords.push(w.punctuated_word || w.word);
+    }
+    if (currentWords.length > 0) {
+      const label = currentChannel === 1 ? `[${localSpeaker}]` : remoteSpeaker;
+      lines.push(`${label} ${currentWords.join(' ')}`);
+    }
+
+    text = lines.length > 0 ? lines.join('\n') : (remoteText || localText);
+  } else if (data.results.utterances && data.results.utterances.length > 0) {
     text = formatDiarized(data.results.utterances);
   } else {
     const words = data.results.channels?.[0]?.alternatives?.[0]?.words;
