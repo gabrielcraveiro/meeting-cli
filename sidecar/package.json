@@ -1,0 +1,8 @@
+{
+  "name": "meeting-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "native-audio-node": "^0.3.5"
+  }
+}

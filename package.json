@@ -1,0 +1,22 @@
+{
+  "name": "meeting-cli",
+  "version": "1.0.0",
+  "description": "CLI for recording, transcribing and chatting with meeting notes",
+  "bin": {
+    "meeting": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs",
+    "install-global": "npm run build && npm install -g ."
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
