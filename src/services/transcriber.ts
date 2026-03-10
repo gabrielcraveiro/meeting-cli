@@ -141,6 +141,7 @@ export async function transcribeFull(filePath: string, config: Config): Promise<
   const params = new URLSearchParams({
     model: 'nova-3',
     diarize: 'true',
+    diarize_version: '2024-11-01',
     utterances: 'true',
     punctuate: 'true',
     smart_format: 'true',

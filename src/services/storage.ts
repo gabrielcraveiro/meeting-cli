@@ -112,8 +112,9 @@ export async function createMeetingNote(
   const meetingsDir = path.join(config.vaultPath, 'Meetings');
   fs.mkdirSync(meetingsDir, { recursive: true });
 
-  const title = params.title || `Meeting ${params.time}`;
-  const fileName = `${params.date} - ${title.replace(/[/\\:*?"<>|]/g, '-').slice(0, 60)}.md`;
+  const title = params.title || 'Meeting';
+  const timeLabel = params.time.replace(':', '-');
+  const fileName = `${params.date} ${timeLabel} - ${title.replace(/[/\\:*?"<>|]/g, '-').slice(0, 60)}.md`;
   const filePath = path.join(meetingsDir, fileName);
   const totalCost = (params.whisperCost + params.chatCost).toFixed(4);
 
