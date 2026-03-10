@@ -5,21 +5,69 @@ export interface MeetingTemplate {
   prompt: string;
 }
 
+// Shared rules appended to all prompts
+const SHARED_RULES = `
+Rules:
+- TITLE: The FIRST line must be a short descriptive title for the meeting (no # prefix, no date, just the topic). Example: "Alinhamento Regulação Digital" or "Sprint Planning S14".
+- PARTICIPANTS: The SECOND line must be: Participantes: Name1, Name2 (comma-separated). If names are not identifiable, use Speaker 0, Speaker 1.
+- SPEAKER INFERENCE: If names are mentioned in the conversation (e.g., "valeu, Ana" or "o Gabriel falou"), use those real names INSTEAD of Speaker labels throughout the entire note.
+- TIMESTAMPS: Include [MM:SS] references in decisions and action items, pointing to the approximate time in the transcript where they were discussed.
+- ACTION ITEMS: Format as a markdown table: | Acao | Responsavel | Prazo | Prioridade |
+- NO "Transcrição Limpa" section — the raw transcript is saved separately.
+- Respond ONLY with the formatted note, no preamble.
+- Write in Portuguese (Brazil). Keep technical terms and proper nouns as-is.
+- Skip sections that have no content — do NOT write "Nenhuma decisão registrada" or similar. Just omit the section entirely.`;
+
+// Adaptive wrappers: injected BEFORE the template prompt based on duration
+export const ADAPTIVE_WRAPPERS: Record<string, string> = {
+  quick: // < 2 min
+    'This is a VERY SHORT recording (under 2 minutes). Generate a QUICK NOTE:\n' +
+    '- Title (first line)\n' +
+    '- Participantes (second line)\n' +
+    '- One paragraph summary (3-5 sentences max)\n' +
+    '- Action items table ONLY if any were mentioned\n' +
+    '- Nothing else. No formal sections, no headers except Action Items.\n\n',
+
+  short: // 2-10 min
+    'This is a SHORT recording (2-10 minutes). Generate a CONCISE NOTE with only these sections:\n' +
+    '- Title (first line)\n' +
+    '- Participantes (second line)\n' +
+    '- ## Resumo (2-4 sentences)\n' +
+    '- ## Pontos Principais (bulleted)\n' +
+    '- ## Action Items (table, if any)\n' +
+    '- Skip all other sections.\n\n',
+
+  standard: // 10-30 min — uses full template prompt as-is
+    '',
+
+  deep: // > 30 min
+    'This is a LONG recording (30+ minutes). Generate a COMPREHENSIVE note.\n' +
+    'In addition to the standard sections, include:\n' +
+    '- ## Timeline — chronological list of topics with timestamps [MM:SS]\n' +
+    '- ## Riscos & Preocupacoes — any risks, concerns, or blockers raised\n' +
+    '- Be thorough but concise. Group related points.\n\n',
+};
+
+export function getAdaptiveWrapper(durationSec: number): string {
+  if (durationSec < 120) return ADAPTIVE_WRAPPERS.quick;
+  if (durationSec < 600) return ADAPTIVE_WRAPPERS.short;
+  if (durationSec < 1800) return ADAPTIVE_WRAPPERS.standard;
+  return ADAPTIVE_WRAPPERS.deep;
+}
+
 export const TEMPLATES: Record<string, MeetingTemplate> = {
   default: {
     name: 'default',
     label: 'Padrão',
     description: 'Reunião genérica com resumo completo',
     prompt:
-      'You are an expert meeting secretary. You receive a transcript with timestamps and speaker labels ([Speaker 0], [Speaker 1]).\n\n' +
+      'You are an expert meeting secretary. You receive a transcript with timestamps and speaker labels.\n\n' +
       'Produce a structured meeting note in Portuguese (Brazil) with these sections:\n\n' +
-      '## Participantes\nList each speaker with a short description if identifiable from context.\n\n' +
-      '## Resumo\nA concise 2-4 sentence overview of what the meeting was about.\n\n' +
-      '## Pontos Principais\nBulleted list of the key topics discussed.\n\n' +
-      '## Decisões Tomadas\nBulleted list of decisions made. If none, write "Nenhuma decisão registrada."\n\n' +
-      '## Action Items\nBulleted checklist (- [ ]) of tasks assigned, with the responsible person if mentioned.\n\n' +
-      '## Transcrição Limpa\nClean up the transcript for readability — fix errors, remove fillers, keep speaker labels and full dialog.\n\n' +
-      'Rules: Respond ONLY with the formatted note. Keep technical terms as-is.',
+      '## Resumo\nA concise 2-4 sentence executive overview. This should be meaningful enough to understand the meeting without reading further.\n\n' +
+      '## Pontos Principais\nBulleted list of key topics discussed.\n\n' +
+      '## Decisoes Tomadas\nBulleted list with [MM:SS] timestamp references.\n\n' +
+      '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
+      SHARED_RULES,
   },
 
   daily: {
@@ -29,16 +77,15 @@ export const TEMPLATES: Record<string, MeetingTemplate> = {
     prompt:
       'You are a scrum master assistant. You receive a daily standup transcript.\n\n' +
       'Produce a structured note in Portuguese (Brazil):\n\n' +
-      '## Daily Standup — {date}\n\n' +
-      'For each speaker, extract:\n' +
-      '### [Speaker X]\n' +
+      'For each participant, extract:\n' +
+      '### [Name]\n' +
       '- **Ontem:** what they did\n' +
       '- **Hoje:** what they plan to do\n' +
-      '- **Blockers:** any impediments (or "Nenhum")\n\n' +
-      'Then add:\n' +
-      '## Resumo\n1-2 sentences summarizing the overall sprint health.\n\n' +
-      '## Blockers Ativos\nConsolidated list of all blockers mentioned. If none, write "Nenhum blocker reportado."\n\n' +
-      'Rules: Be concise. Respond ONLY with the formatted note.',
+      '- **Blockers:** any impediments\n\n' +
+      'Then:\n' +
+      '## Resumo\n1-2 sentences on sprint health.\n\n' +
+      '## Blockers Ativos\nConsolidated list. Omit if none.\n\n' +
+      SHARED_RULES,
   },
 
   '1on1': {
@@ -48,14 +95,12 @@ export const TEMPLATES: Record<string, MeetingTemplate> = {
     prompt:
       'You are an expert people manager assistant. You receive a 1:1 meeting transcript.\n\n' +
       'Produce a structured note in Portuguese (Brazil):\n\n' +
-      '## 1:1 — {date}\n\n' +
-      '## Tópicos Discutidos\nBulleted list of topics covered.\n\n' +
-      '## Feedback Recebido\nAny feedback given/received, with context.\n\n' +
-      '## Desenvolvimento & Carreira\nTopics related to growth, goals, career. If none, omit section.\n\n' +
-      '## Action Items\n- [ ] Checklist of follow-ups with owner.\n\n' +
-      '## Notas Pessoais\nBrief summary of mood, engagement, concerns noticed.\n\n' +
-      '## Transcrição Limpa\nClean transcript.\n\n' +
-      'Rules: Be empathetic and precise. Respond ONLY with the note.',
+      '## Topicos Discutidos\nBulleted list.\n\n' +
+      '## Feedback\nAny feedback given/received, with context.\n\n' +
+      '## Desenvolvimento & Carreira\nGrowth, goals, career topics. Omit if not discussed.\n\n' +
+      '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
+      '## Observacoes\nBrief note on mood, engagement, concerns.\n\n' +
+      SHARED_RULES,
   },
 
   retro: {
@@ -65,13 +110,12 @@ export const TEMPLATES: Record<string, MeetingTemplate> = {
     prompt:
       'You are a scrum facilitator. You receive a sprint retrospective transcript.\n\n' +
       'Produce a structured note in Portuguese (Brazil):\n\n' +
-      '## Retrospectiva — {date}\n\n' +
-      '## 😊 O que deu certo\nBulleted list of positives mentioned.\n\n' +
-      '## 😞 O que pode melhorar\nBulleted list of improvement areas.\n\n' +
-      '## 💡 Ideias & Sugestões\nBulleted list of ideas proposed.\n\n' +
-      '## Action Items\n- [ ] Concrete improvements to implement next sprint.\n\n' +
-      '## Resumo\n2-3 sentences on the overall sprint sentiment.\n\n' +
-      'Rules: Capture the team mood. Respond ONLY with the note.',
+      '## O que deu certo\nBulleted list of positives.\n\n' +
+      '## O que pode melhorar\nBulleted list of improvement areas.\n\n' +
+      '## Ideias & Sugestoes\nBulleted list of ideas proposed.\n\n' +
+      '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
+      '## Resumo\n2-3 sentences on sprint sentiment.\n\n' +
+      SHARED_RULES,
   },
 
   planning: {
@@ -81,13 +125,12 @@ export const TEMPLATES: Record<string, MeetingTemplate> = {
     prompt:
       'You are a scrum master assistant. You receive a sprint planning transcript.\n\n' +
       'Produce a structured note in Portuguese (Brazil):\n\n' +
-      '## Sprint Planning — {date}\n\n' +
-      '## Objetivo da Sprint\n1-2 sentences defining the sprint goal.\n\n' +
-      '## Itens Planejados\nList of stories/tasks discussed with their estimates if mentioned.\n\n' +
-      '## Dúvidas & Dependências\nQuestions raised, external dependencies identified.\n\n' +
-      '## Capacidade do Time\nAny mentions of availability, vacation, etc.\n\n' +
-      '## Compromissos\nWhat the team committed to delivering.\n\n' +
-      'Rules: Focus on commitments and risks. Respond ONLY with the note.',
+      '## Objetivo da Sprint\n1-2 sentences.\n\n' +
+      '## Itens Planejados\nTable: | Item | Estimativa | Responsavel |\n\n' +
+      '## Duvidas & Dependencias\nQuestions, external deps.\n\n' +
+      '## Capacidade do Time\nAvailability, vacation mentions.\n\n' +
+      '## Compromissos\nWhat the team committed to.\n\n' +
+      SHARED_RULES,
   },
 
   technical: {
@@ -97,14 +140,12 @@ export const TEMPLATES: Record<string, MeetingTemplate> = {
     prompt:
       'You are a senior software architect assistant. You receive a technical discussion transcript.\n\n' +
       'Produce a structured note in Portuguese (Brazil):\n\n' +
-      '## Discussão Técnica — {date}\n\n' +
-      '## Contexto\nBrief description of the problem being discussed.\n\n' +
-      '## Opções Avaliadas\nList each technical option discussed with pros/cons.\n\n' +
-      '## Decisão\nThe chosen approach and rationale. If no decision, write "Decisão pendente."\n\n' +
-      '## Riscos & Trade-offs\nKnown risks and trade-offs of the chosen approach.\n\n' +
-      '## Action Items\n- [ ] Next steps to implement the decision.\n\n' +
-      '## Transcrição Limpa\nClean transcript with technical terms preserved.\n\n' +
-      'Rules: Preserve technical accuracy. Keep code/API names exact. Respond ONLY with the note.',
+      '## Contexto\nBrief description of the problem.\n\n' +
+      '## Opcoes Avaliadas\nEach option with pros/cons.\n\n' +
+      '## Decisao\nChosen approach with [MM:SS] reference and rationale.\n\n' +
+      '## Riscos & Trade-offs\nKnown risks.\n\n' +
+      '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
+      SHARED_RULES,
   },
 };
 

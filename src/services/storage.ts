@@ -105,23 +105,29 @@ export async function createMeetingNote(
     date: string;
     time: string;
     tags?: string[];
+    title?: string;
+    participants?: string[];
   }
 ): Promise<string> {
   const meetingsDir = path.join(config.vaultPath, 'Meetings');
   fs.mkdirSync(meetingsDir, { recursive: true });
 
-  const fileName = `${params.date} - Meeting ${params.time.replace(':', '-')}.md`;
+  const title = params.title || `Meeting ${params.time}`;
+  const fileName = `${params.date} - ${title.replace(/[/\\:*?"<>|]/g, '-').slice(0, 60)}.md`;
   const filePath = path.join(meetingsDir, fileName);
   const totalCost = (params.whisperCost + params.chatCost).toFixed(4);
 
   const baseTags = ['meeting'];
   const allTags = [...new Set([...baseTags, ...(params.tags || [])])];
+  const participantsList = params.participants && params.participants.length > 0
+    ? `\nparticipants: [${params.participants.join(', ')}]` : '';
 
   const content = `---
 type: meeting
-tags: [${allTags.join(', ')}]
+tags: [${allTags.join(', ')}]${participantsList}
 date: ${params.date}
 time: ${params.time}
+title: "${title}"
 status: done
 audio_seconds: ${Math.round(params.durationSec)}
 transcription_model: deepgram
@@ -129,11 +135,12 @@ ai_model: ${params.chatDeployment}
 ai_input_tokens: ${params.inputTokens}
 ai_output_tokens: ${params.outputTokens}
 ai_total_tokens: ${params.totalTokens}
+transcription_cost_usd: ${params.whisperCost.toFixed(4)}
+ai_cost_usd: ${params.chatCost.toFixed(4)}
 estimated_cost_usd: ${totalCost}
 ---
-# Meeting Notes: ${params.date} ${params.time}
+# ${title}
 
-## Audio Recording
 ![[${params.audioPath}]]
 
 ## AI Summary

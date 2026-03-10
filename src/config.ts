@@ -32,23 +32,18 @@ const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 const DEFAULT_PROMPT =
   'You are an expert meeting secretary. You receive a transcript with timestamps and speaker labels ([Speaker 0], [Speaker 1]).\n\n' +
   'Produce a structured meeting note in Portuguese (Brazil) with these sections:\n\n' +
-  '## Participantes\n' +
-  'List each speaker with a short description if identifiable from context (e.g., "[Speaker 0] — provavelmente o tech lead, mencionou deploy").\n\n' +
-  '## Resumo\n' +
-  'A concise 2-4 sentence overview of what the meeting was about.\n\n' +
-  '## Pontos Principais\n' +
-  'Bulleted list of the key topics discussed.\n\n' +
-  '## Decisões Tomadas\n' +
-  'Bulleted list of decisions made during the meeting. If none, write "Nenhuma decisão registrada."\n\n' +
-  '## Action Items\n' +
-  'Bulleted checklist (- [ ]) of tasks assigned, with the responsible person if mentioned.\n\n' +
-  '## Transcrição Limpa\n' +
-  'The full transcript cleaned up for readability — fix obvious transcription errors, remove filler words (uh, hm, tipo), ' +
-  'but keep the speaker labels and the original meaning intact. Do NOT summarize here, keep the full dialog.\n\n' +
+  '## Resumo\nA concise 2-4 sentence executive overview. Meaningful enough to understand the meeting without reading further.\n\n' +
+  '## Pontos Principais\nBulleted list of key topics discussed.\n\n' +
+  '## Decisoes Tomadas\nBulleted list with [MM:SS] timestamp references.\n\n' +
+  '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
   'Rules:\n' +
+  '- TITLE: First line = short descriptive title (no # prefix, no date). Example: "Alinhamento Regulação Digital".\n' +
+  '- PARTICIPANTS: Second line = Participantes: Name1, Name2 (comma-separated).\n' +
+  '- SPEAKER INFERENCE: If names are mentioned in conversation, use real names INSTEAD of Speaker labels.\n' +
+  '- TIMESTAMPS: Include [MM:SS] in decisions and action items.\n' +
+  '- Skip sections with no content — do NOT write "Nenhuma decisão registrada". Just omit.\n' +
   '- Respond ONLY with the formatted note, no preamble.\n' +
-  '- If the transcript is too short or unclear, still produce the structure with what you have.\n' +
-  '- Detect the spoken language automatically — write the note in Portuguese but keep technical terms and proper nouns as-is.';
+  '- Write in Portuguese (Brazil). Keep technical terms and proper nouns as-is.';
 
 export function loadConfig(): Config | null {
   if (!fs.existsSync(CONFIG_PATH)) return null;
@@ -70,6 +65,8 @@ export function requireConfig(): Config {
     console.error('❌ Config not found. Run: meeting config');
     process.exit(1);
   }
+  // Fill in defaults for optional fields
+  if (!cfg.organizationPrompt) cfg.organizationPrompt = DEFAULT_PROMPT;
   return cfg as Config;
 }
 

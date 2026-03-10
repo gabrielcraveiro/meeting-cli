@@ -11,7 +11,7 @@ import { transcribeFile, transcribeFull } from '../services/transcriber';
 import { organizeTranscript, chatWithMeetings } from '../services/organizer';
 import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
 import { getSidecarCapturePath } from './setup';
-import { getTemplate, listTemplates } from '../services/templates';
+import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/templates';
 
 const DEEPGRAM_PER_MIN = 0.006;
 const SEGMENT_SECONDS = 45;
@@ -444,17 +444,23 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       }
     }
 
+    // Build adaptive prompt: wrapper (based on duration) + template prompt
+    const adaptiveWrapper = getAdaptiveWrapper(durationSec);
+    const basePrompt = effectiveTemplate && effectiveTemplate.name !== 'default'
+      ? effectiveTemplate.prompt
+      : config.organizationPrompt;
+    const finalPrompt = adaptiveWrapper + basePrompt;
+
     const templateLabel = effectiveTemplate && effectiveTemplate.name !== 'default' ? ` ${effectiveTemplate.label}` : '';
-    s = createSpinner(`Organizando com IA${templateLabel}...`).start();
+    const adaptiveLabel = durationSec < 120 ? ' (quick)' : durationSec < 600 ? ' (short)' : durationSec > 1800 ? ' (deep)' : '';
+    s = createSpinner(`Organizando com IA${templateLabel}${adaptiveLabel}...`).start();
     let summary = '';
     let chatCost = 0;
     let inputTokens = 0;
     let outputTokens = 0;
     let totalTokens = 0;
 
-    const configWithPrompt = effectiveTemplate && effectiveTemplate.name !== 'default'
-      ? { ...config, organizationPrompt: effectiveTemplate.prompt }
-      : config;
+    const configWithPrompt = { ...config, organizationPrompt: finalPrompt };
 
     try {
       const result = await organizeTranscript(fullTranscript, configWithPrompt);
@@ -469,12 +475,42 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       summary = '> Organizacao automatica falhou.';
     }
 
-    // Auto-detect meeting tags
+    // Parse title and participants from AI output (first two lines)
+    let meetingTitle = '';
+    let participants: string[] = [];
+    const summaryLines = summary.split('\n');
+    if (summaryLines.length >= 1) {
+      const firstLine = summaryLines[0].replace(/^#+\s*/, '').trim();
+      // Title is first line if it doesn't look like a section header or metadata
+      if (firstLine && !firstLine.startsWith('##') && !firstLine.startsWith('|') && !firstLine.startsWith('-')) {
+        meetingTitle = firstLine;
+        summaryLines.shift();
+      }
+    }
+    if (summaryLines.length >= 1) {
+      const participantsLine = summaryLines[0];
+      const partMatch = participantsLine.match(/^Participantes:\s*(.+)/i);
+      if (partMatch) {
+        participants = partMatch[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
+        summaryLines.shift();
+      }
+    }
+    // Rebuild summary without title/participants lines
+    summary = summaryLines.join('\n').replace(/^\n+/, '');
+
+    if (meetingTitle) {
+      console.log(chalk.white(`  Titulo: ${meetingTitle}`));
+    }
+    if (participants.length > 0) {
+      console.log(chalk.gray(`  Participantes: ${participants.join(', ')}`));
+    }
+
+    // Auto-detect meeting tags (combined with title for better detection)
     let detectedTags: string[] = [];
     try {
       const tagMessages = [
         { role: 'system', content: 'Analise esta transcricao e retorne tags relevantes para categorizar a reuniao. Retorne APENAS uma lista separada por virgula, sem explicacao. Exemplos de tags: backend, frontend, deploy, produto, financeiro, dados, infraestrutura, seguranca, design, planejamento, retrospectiva, daily, 1on1. Maximo 5 tags.' },
-        { role: 'user', content: fullTranscript.slice(0, 3000) },
+        { role: 'user', content: (meetingTitle + '\n' + fullTranscript).slice(0, 3000) },
       ];
       const tagResponse = (await chatWithMeetings(tagMessages, config)).trim();
       detectedTags = tagResponse.split(',').map(t => t.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')).filter(t => t.length > 1 && t.length < 30);
@@ -501,6 +537,8 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       date,
       time: noteTime,
       tags: detectedTags,
+      title: meetingTitle,
+      participants,
     });
     s.success({ text: path.basename(notePath) });
 
