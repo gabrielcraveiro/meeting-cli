@@ -374,6 +374,54 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       return;
     }
 
+    // Speaker naming wizard: find unknown speakers and ask user
+    const speakerRegex = /\[Speaker (\d+)\]/g;
+    const speakerIds = new Set<string>();
+    let speakerMatch: RegExpExecArray | null;
+    while ((speakerMatch = speakerRegex.exec(fullTranscript)) !== null) {
+      speakerIds.add(speakerMatch[1]);
+    }
+
+    if (speakerIds.size > 0) {
+      const unknownSpeakers: string[] = [];
+      for (const id of speakerIds) {
+        if (!config.speakerNames?.[`Speaker ${id}`]) {
+          unknownSpeakers.push(id);
+        }
+      }
+
+      if (unknownSpeakers.length > 0 && rl) {
+        console.log(chalk.bold('\n  Identificacao de speakers:\n'));
+        for (const id of unknownSpeakers) {
+          const label = `[Speaker ${id}]`;
+          const lines = fullTranscript.split('\n').filter(l => l.includes(label));
+          const sample = lines.slice(0, 2).map(l => l.replace(label, '').trim().slice(0, 80)).join(' | ');
+          console.log(chalk.cyan(`  Speaker ${id}:`) + chalk.gray(` "${sample}"`));
+        }
+        console.log(chalk.gray('  (Enter para pular, nome para salvar no config)\n'));
+
+        for (const id of unknownSpeakers) {
+          const name = await new Promise<string>((resolve) => {
+            rl!.question(chalk.cyan(`  Speaker ${id} = `), (answer: string) => {
+              resolve(answer.trim());
+            });
+          });
+          if (name) {
+            if (!config.speakerNames) config.speakerNames = {};
+            config.speakerNames[`Speaker ${id}`] = name;
+            fullTranscript = fullTranscript.replace(new RegExp(`\\[Speaker ${id}\\]`, 'g'), `[${name}]`);
+          }
+        }
+
+        // Save updated config with new speaker names
+        if (Object.keys(config.speakerNames || {}).length > 0) {
+          const { saveConfig } = await import('../config');
+          saveConfig(config);
+          console.log(chalk.green('  Speaker names salvos no config.\n'));
+        }
+      }
+    }
+
     // Smart template detection
     let effectiveTemplate = template;
     if (!effectiveTemplate || effectiveTemplate.name === 'default') {
@@ -421,6 +469,20 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       summary = '> Organizacao automatica falhou.';
     }
 
+    // Auto-detect meeting tags
+    let detectedTags: string[] = [];
+    try {
+      const tagMessages = [
+        { role: 'system', content: 'Analise esta transcricao e retorne tags relevantes para categorizar a reuniao. Retorne APENAS uma lista separada por virgula, sem explicacao. Exemplos de tags: backend, frontend, deploy, produto, financeiro, dados, infraestrutura, seguranca, design, planejamento, retrospectiva, daily, 1on1. Maximo 5 tags.' },
+        { role: 'user', content: fullTranscript.slice(0, 3000) },
+      ];
+      const tagResponse = (await chatWithMeetings(tagMessages, config)).trim();
+      detectedTags = tagResponse.split(',').map(t => t.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')).filter(t => t.length > 1 && t.length < 30);
+      if (detectedTags.length > 0) {
+        console.log(chalk.gray(`  Tags: ${detectedTags.join(', ')}`));
+      }
+    } catch {}
+
     const deepgramCost = (durationSec / 60) * DEEPGRAM_PER_MIN;
     const noteTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -438,6 +500,7 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       totalTokens,
       date,
       time: noteTime,
+      tags: detectedTags,
     });
     s.success({ text: path.basename(notePath) });
 

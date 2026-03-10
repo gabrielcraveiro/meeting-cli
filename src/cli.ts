@@ -7,6 +7,8 @@ import { cmdTranscribe } from './commands/transcribe';
 import { cmdSearch } from './commands/search';
 import { runConfigWizard, loadConfig } from './config';
 import { cmdSetup, isSidecarInstalled } from './commands/setup';
+import { cmdDoctor } from './commands/doctor';
+import { cmdStats } from './commands/stats';
 import { listTemplates } from './services/templates';
 
 const program = new Command();
@@ -14,7 +16,7 @@ const program = new Command();
 program
   .name('meeting')
   .description('CLI para gravação, transcrição e chat com reuniões')
-  .version('1.1.0');
+  .version('1.2.0');
 
 program
   .command('start')
@@ -65,6 +67,16 @@ program
     console.log('\nUso: meeting start --template daily');
     console.log('     meeting transcribe audio.wav --template retro\n');
   });
+
+program
+  .command('doctor')
+  .description('Diagnostica problemas de configuracao e conexao')
+  .action(cmdDoctor);
+
+program
+  .command('stats')
+  .description('Mostra estatisticas e gera dashboard no vault')
+  .action(cmdStats);
 
 program
   .command('config')

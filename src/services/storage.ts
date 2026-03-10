@@ -55,8 +55,8 @@ export function listMeetings(config: Config): MeetingMeta[] {
       filePath,
       date: meta['date'] || '',
       time: meta['time'] || '',
-      audioSeconds: parseInt(meta['audio_seconds'] || '0'),
-      estimatedCostUsd: parseFloat(meta['estimated_cost_usd'] || '0'),
+      audioSeconds: parseInt(meta['audio_seconds'] || '0') || 0,
+      estimatedCostUsd: parseFloat(meta['estimated_cost_usd'] || '0') || 0,
       aiModel: meta['ai_model'] || '',
       status: meta['status'] || '',
       hasSummary: !!summary && !summary.includes('Generating summary'),
@@ -104,6 +104,7 @@ export async function createMeetingNote(
     totalTokens: number;
     date: string;
     time: string;
+    tags?: string[];
   }
 ): Promise<string> {
   const meetingsDir = path.join(config.vaultPath, 'Meetings');
@@ -113,9 +114,12 @@ export async function createMeetingNote(
   const filePath = path.join(meetingsDir, fileName);
   const totalCost = (params.whisperCost + params.chatCost).toFixed(4);
 
+  const baseTags = ['meeting'];
+  const allTags = [...new Set([...baseTags, ...(params.tags || [])])];
+
   const content = `---
 type: meeting
-tags: [epharma, meeting]
+tags: [${allTags.join(', ')}]
 date: ${params.date}
 time: ${params.time}
 status: done
