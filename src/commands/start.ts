@@ -109,9 +109,6 @@ class TerminalUI {
     this.cols = process.stdout.columns || 80;
     this.active = true;
 
-    // Hide cursor during UI
-    process.stdout.write(`${ESC}?25l`);
-
     // Clear screen and draw initial layout
     process.stdout.write(`${ESC}2J${ESC}H`);
 
@@ -146,8 +143,9 @@ class TerminalUI {
 
   private _drawHeader() {
     if (!this.active) return;
-    // Save cursor position
-    process.stdout.write(`${ESC}s`);
+
+    // Temporarily leave scroll region to write header
+    process.stdout.write(`${ESC}r`);  // reset scroll region
 
     const recording = chalk.red.bold(' ● REC');
     const time = chalk.white.bold(this.currentTime);
@@ -172,19 +170,26 @@ class TerminalUI {
     process.stdout.write(`${ESC}3;1H${ESC}2K`);
     process.stdout.write(chalk.gray('─'.repeat(Math.min(this.cols, 80))));
 
-    // Restore cursor position
-    process.stdout.write(`${ESC}u`);
+    // Restore scroll region and move cursor back into it
+    this._setScrollRegion();
+    this._moveCursorToScroll();
   }
 
   private _drawFooter(hint?: string) {
     if (!this.active) return;
-    process.stdout.write(`${ESC}s`);
+
+    // Temporarily leave scroll region to write footer
+    process.stdout.write(`${ESC}r`);  // reset scroll region
+
     const footerRow = this.rows;
     process.stdout.write(`${ESC}${footerRow};1H${ESC}2K`);
     const commands = chalk.gray('/stop  /help  /ctx');
     const prompt = hint || chalk.bold.green('Você: ');
     process.stdout.write(`${commands}${' '.repeat(Math.max(2, this.cols - 40))}${prompt}`);
-    process.stdout.write(`${ESC}u`);
+
+    // Restore scroll region and move cursor back into it
+    this._setScrollRegion();
+    this._moveCursorToScroll();
   }
 
   private _moveCursorToScroll() {
@@ -229,8 +234,6 @@ class TerminalUI {
     this.active = false;
     // Reset scroll region to full terminal
     process.stdout.write(`${ESC}r`);
-    // Show cursor
-    process.stdout.write(`${ESC}?25h`);
     // Move to bottom
     process.stdout.write(`${ESC}${this.rows};1H\n`);
   }
@@ -1110,7 +1113,14 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       return;
     }
 
-    // /ctx command — add context from file or free text
+    // /ctx bare (no args) — show usage hint
+    if (cmd === 'ctx') {
+      ui.appendLine(chalk.yellow('  Uso: /ctx <arquivo.md> ou /ctx <texto livre>'));
+      ui.appendLine(chalk.gray('  /contexto para ver contextos carregados'));
+      return;
+    }
+
+    // /ctx <arg> command — add context from file or free text
     if (cmd.startsWith('ctx ') || cmd.startsWith('contexto ')) {
       const arg = text.replace(/^\/+\w+\s+/, '').trim();
       if (!arg) {
