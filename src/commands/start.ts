@@ -13,7 +13,7 @@ import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
 import { getSidecarCapturePath } from './setup';
 import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/templates';
 
-const DEEPGRAM_PER_MIN = 0.006;
+const DEEPGRAM_PER_MIN = 0.0077;  // nova-3 + diarization, single-pass
 const SEGMENT_SECONDS = 45;
 const WARN_SECONDS = 30 * 60;
 const HARD_STOP_SECONDS = 60 * 60;
@@ -174,6 +174,9 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
   let consecutiveSilentSegments = 0;
   let semanticContextLoaded = false;
   const segmentRmsDb: Map<number, number> = new Map();
+  let skippedSilentSegments = 0;
+  let transcribedSegments = 0;
+  const remoteSpeakerIds = new Set<string>();   // track unique remote speakers across segments
 
   const ui = new TerminalUI();
   const chatHistory: Array<{ role: string; content: string }> = [];
@@ -188,18 +191,29 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       if (stat.size < 4096) return;
 
       ui.appendLine(chalk.gray(`  transcrevendo ${path.basename(segPath)}...`));
-      const text = await transcribeFile(segPath, config);
+      // Single-pass: nova-3 + diarization on each segment (no re-transcription needed)
+      const text = await transcribeFile(segPath, config, { diarize: true, model: 'nova-3' });
       if (!text) return;
 
-      const line = `${formatTimestamp(offsetSec)} ${text}`;
-      transcriptLines.push(line);
+      transcribedSegments++;
 
-      // After first transcription, load semantically relevant past meetings
-      if (!semanticContextLoaded) {
-        loadSemanticContext(); // fire-and-forget, non-blocking
+      // Track unique remote speakers for multi-speaker fallback detection
+      const speakerMatches = text.matchAll(/\[(?:Remoto|Speaker)\s+(\d+)\]/g);
+      for (const m of speakerMatches) remoteSpeakerIds.add(m[1]);
+
+      // Store with timestamp prefix on first line only
+      const lines = text.split('\n').filter(l => l.trim());
+      if (lines.length > 0) {
+        transcriptLines.push(`${formatTimestamp(offsetSec)} ${lines[0]}`);
+        for (let i = 1; i < lines.length; i++) {
+          transcriptLines.push(lines[i]);
+        }
       }
 
-      // Show each speaker line separately for readability
+      if (!semanticContextLoaded) {
+        loadSemanticContext();
+      }
+
       for (const speakerLine of text.split('\n')) {
         if (speakerLine.trim()) {
           ui.appendLine(chalk.cyan(`  ${formatTimestamp(offsetSec)} `) + speakerLine.trim());
@@ -220,6 +234,15 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
         if (!processedSegments.has(seg)) {
           processedSegments.add(seg);
           const segIndex = parseInt(seg.replace('seg_', '').replace('.wav', ''));
+
+          // Strategy: skip silent segments before transcribing (cost savings)
+          const rmsDb = segmentRmsDb.get(segIndex);
+          if (rmsDb !== undefined && rmsDb < SILENCE_THRESHOLD_DB) {
+            skippedSilentSegments++;
+            ui.appendLine(chalk.gray(`  seg_${segIndex} silencioso (${rmsDb.toFixed(0)} dB) — pulado`));
+            continue;
+          }
+
           await transcribeSegment(path.join(segmentsDir, seg), segIndex * SEGMENT_SECONDS);
           showTimestamp();
         }
@@ -427,22 +450,34 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       s.error({ text: `Merge falhou: ${(err as Error).message}` });
     }
 
-    // 2. Re-transcribe full audio with nova-3 + diarization + speaker names
-    let fullTranscript = transcriptLines.join('\n'); // fallback: live segments
+    // 2. Smart transcription: single-pass for ≤1 remote speaker, re-transcribe for multi-speaker
+    let fullTranscript = transcriptLines.join('\n');
+    if (skippedSilentSegments > 0) {
+      const savedCost = (skippedSilentSegments * SEGMENT_SECONDS / 60 * DEEPGRAM_PER_MIN).toFixed(4);
+      console.log(chalk.green(`  ${skippedSilentSegments} segmentos silenciosos pulados (economia: ~$${savedCost})`));
+    }
 
-    if (fs.existsSync(finalAudioPath)) {
-      s = createSpinner('Re-transcrevendo com nova-3 + diarizacao...').start();
+    // Re-transcribe when: (a) no segments were processed (short recording), or (b) multi-speaker
+    const noSegmentsProcessed = transcribedSegments === 0;
+    const needsRetranscription = noSegmentsProcessed || remoteSpeakerIds.size > 1;
+    if (needsRetranscription && fs.existsSync(finalAudioPath)) {
+      const reason = noSegmentsProcessed
+        ? 'gravacao curta, nenhum segmento processado'
+        : `${remoteSpeakerIds.size} speakers remotos detectados`;
+      s = createSpinner(`Transcrevendo audio completo (${reason})...`).start();
       try {
         const fullText = await transcribeFull(finalAudioPath, config);
         if (fullText.trim()) {
           fullTranscript = fullText;
-          s.success({ text: `Transcricao final: ${fullText.split('\n').length} linhas com diarizacao` });
+          s.success({ text: `Transcricao: ${fullText.split('\n').length} linhas` });
         } else {
-          s.warn({ text: 'Re-transcricao vazia, usando segmentos' });
+          s.warn({ text: 'Transcricao vazia' });
         }
       } catch (err) {
-        s.warn({ text: `Re-transcricao falhou, usando segmentos: ${(err as Error).message}` });
+        s.warn({ text: `Transcricao falhou: ${(err as Error).message}` });
       }
+    } else {
+      console.log(chalk.gray(`  Transcricao: ${transcribedSegments} segmentos com nova-3 (single-pass)`));
     }
 
     if (!fullTranscript.trim()) {
@@ -451,62 +486,73 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       return;
     }
 
-    // Speaker naming wizard: find unknown speakers and ask user
-    const speakerRegex = /\[Speaker (\d+)\]/g;
-    const speakerIds = new Set<string>();
-    let speakerMatch: RegExpExecArray | null;
-    while ((speakerMatch = speakerRegex.exec(fullTranscript)) !== null) {
-      speakerIds.add(speakerMatch[1]);
+    // Speaker naming wizard: detect unknown speakers ([Speaker N] and [Remoto N])
+    const unknownLabels: Array<{ label: string; configKey: string }> = [];
+    const speakerPatterns = fullTranscript.matchAll(/\[(Speaker \d+|Remoto \d+)\]/g);
+    const seenLabels = new Set<string>();
+    for (const m of speakerPatterns) {
+      const label = m[1];
+      if (seenLabels.has(label)) continue;
+      seenLabels.add(label);
+      // Config key: "Speaker N" for both [Speaker N] and [Remoto N]
+      const configKey = label.startsWith('Remoto')
+        ? `Speaker ${label.replace('Remoto ', '')}`
+        : label;
+      if (!config.speakerNames?.[configKey]) {
+        unknownLabels.push({ label, configKey });
+      }
     }
 
-    if (speakerIds.size > 0) {
-      const unknownSpeakers: string[] = [];
-      for (const id of speakerIds) {
-        if (!config.speakerNames?.[`Speaker ${id}`]) {
-          unknownSpeakers.push(id);
+    // Recreate readline for post-meeting wizard
+    let wizardRl: readline.Interface | null = null;
+    try {
+      wizardRl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    } catch {}
+
+    if (wizardRl && unknownLabels.length > 0) {
+      console.log(chalk.bold('\n  Identificacao de speakers:\n'));
+      for (const { label } of unknownLabels) {
+        const tag = `[${label}]`;
+        const lines = fullTranscript.split('\n').filter(l => l.includes(tag));
+        const sample = lines.slice(0, 2).map(l => l.replace(tag, '').trim().slice(0, 80)).join(' | ');
+        console.log(chalk.cyan(`  ${label}:`) + chalk.gray(` "${sample}"`));
+      }
+      console.log(chalk.gray('  (Enter para pular, nome para salvar no config)\n'));
+
+      for (const { label, configKey } of unknownLabels) {
+        const name = await new Promise<string>((resolve) => {
+          wizardRl!.question(chalk.cyan(`  ${label} = `), (answer: string) => {
+            resolve(answer.trim());
+          });
+        });
+        if (name) {
+          if (!config.speakerNames) config.speakerNames = {};
+          config.speakerNames[configKey] = name;
+          fullTranscript = fullTranscript.replace(new RegExp(`\\[${label}\\]`, 'g'), `[${name}]`);
         }
       }
 
-      if (unknownSpeakers.length > 0) {
-        // Recreate readline for the wizard (original may be closed by Ctrl+C)
-        let wizardRl: readline.Interface | null = null;
-        try {
-          wizardRl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        } catch {}
-
-        if (wizardRl) {
-          console.log(chalk.bold('\n  Identificacao de speakers:\n'));
-          for (const id of unknownSpeakers) {
-            const label = `[Speaker ${id}]`;
-            const lines = fullTranscript.split('\n').filter(l => l.includes(label));
-            const sample = lines.slice(0, 2).map(l => l.replace(label, '').trim().slice(0, 80)).join(' | ');
-            console.log(chalk.cyan(`  Speaker ${id}:`) + chalk.gray(` "${sample}"`));
-          }
-          console.log(chalk.gray('  (Enter para pular, nome para salvar no config)\n'));
-
-          const askRl = wizardRl;
-          for (const id of unknownSpeakers) {
-            const name = await new Promise<string>((resolve) => {
-              askRl.question(chalk.cyan(`  Speaker ${id} = `), (answer: string) => {
-                resolve(answer.trim());
-              });
-            });
-            if (name) {
-              if (!config.speakerNames) config.speakerNames = {};
-              config.speakerNames[`Speaker ${id}`] = name;
-              fullTranscript = fullTranscript.replace(new RegExp(`\\[Speaker ${id}\\]`, 'g'), `[${name}]`);
-            }
-          }
-          askRl.close();
-
-          // Save updated config with new speaker names
-          if (Object.keys(config.speakerNames || {}).length > 0) {
-            const { saveConfig } = await import('../config');
-            saveConfig(config);
-            console.log(chalk.green('  Speaker names salvos no config.\n'));
-          }
-        }
+      if (Object.keys(config.speakerNames || {}).length > 0) {
+        const { saveConfig } = await import('../config');
+        saveConfig(config);
+        console.log(chalk.green('  Speaker names salvos no config.'));
       }
+    }
+
+    // Post-meeting context: ask for optional extra context to enrich the note
+    let postMeetingContext = '';
+    if (wizardRl) {
+      console.log('');
+      const ctx = await new Promise<string>((resolve) => {
+        wizardRl!.question(chalk.magenta('  Contexto extra para a nota? ') + chalk.gray('(Enter para pular): '), (answer: string) => {
+          resolve(answer.trim());
+        });
+      });
+      if (ctx) {
+        postMeetingContext = ctx;
+        console.log(chalk.green(`  + Contexto adicionado`));
+      }
+      wizardRl.close();
     }
 
     // Smart template detection
@@ -536,7 +582,8 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     const basePrompt = effectiveTemplate && effectiveTemplate.name !== 'default'
       ? effectiveTemplate.prompt
       : config.organizationPrompt;
-    const finalPrompt = adaptiveWrapper + basePrompt;
+    const tagInstruction = '\n\nApos a nota, adicione uma ultima linha no formato exato:\nTags: tag1, tag2, tag3\n(maximo 5 tags relevantes: backend, frontend, deploy, produto, financeiro, dados, infraestrutura, seguranca, design, planejamento, retrospectiva, daily, 1on1)';
+    const finalPrompt = adaptiveWrapper + basePrompt + tagInstruction;
 
     const templateLabel = effectiveTemplate && effectiveTemplate.name !== 'default' ? ` ${effectiveTemplate.label}` : '';
     const adaptiveLabel = durationSec < 120 ? ' (quick)' : durationSec < 600 ? ' (short)' : durationSec > 1800 ? ' (deep)' : '';
@@ -547,10 +594,14 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     let outputTokens = 0;
     let totalTokens = 0;
 
+    // Inject post-meeting context into transcript for richer AI output
+    const transcriptForAI = postMeetingContext
+      ? `${fullTranscript}\n\n[Contexto do usuario pos-reuniao]: ${postMeetingContext}`
+      : fullTranscript;
     const configWithPrompt = { ...config, organizationPrompt: finalPrompt };
 
     try {
-      const result = await organizeTranscript(fullTranscript, configWithPrompt);
+      const result = await organizeTranscript(transcriptForAI, configWithPrompt);
       summary = result.text;
       chatCost = result.costUsd;
       inputTokens = result.inputTokens;
@@ -592,21 +643,21 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       console.log(chalk.gray(`  Participantes: ${participants.join(', ')}`));
     }
 
-    // Auto-detect meeting tags (combined with title for better detection)
+    // Extract tags from AI response (consolidated — no separate API call)
     let detectedTags: string[] = [];
-    try {
-      const tagMessages = [
-        { role: 'system', content: 'Analise esta transcricao e retorne tags relevantes para categorizar a reuniao. Retorne APENAS uma lista separada por virgula, sem explicacao. Exemplos de tags: backend, frontend, deploy, produto, financeiro, dados, infraestrutura, seguranca, design, planejamento, retrospectiva, daily, 1on1. Maximo 5 tags.' },
-        { role: 'user', content: (meetingTitle + '\n' + fullTranscript).slice(0, 3000) },
-      ];
-      const tagResponse = (await chatWithMeetings(tagMessages, config)).trim();
-      detectedTags = tagResponse.split(',').map(t => t.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')).filter(t => t.length > 1 && t.length < 30);
-      if (detectedTags.length > 0) {
-        console.log(chalk.gray(`  Tags: ${detectedTags.join(', ')}`));
-      }
-    } catch {}
+    const tagLineMatch = summary.match(/^Tags:\s*(.+)$/mi);
+    if (tagLineMatch) {
+      detectedTags = tagLineMatch[1].split(',').map(t => t.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')).filter(t => t.length > 1 && t.length < 30);
+      summary = summary.replace(/\n*Tags:\s*.+$/mi, '').trim();
+    }
+    if (detectedTags.length > 0) {
+      console.log(chalk.gray(`  Tags: ${detectedTags.join(', ')}`));
+    }
 
-    const deepgramCost = (durationSec / 60) * DEEPGRAM_PER_MIN;
+    // Cost: segments transcribed + optional re-transcription for multi-speaker
+    const segmentMin = (transcribedSegments * SEGMENT_SECONDS) / 60;
+    const retranscribeMin = needsRetranscription ? (durationSec / 60) : 0;
+    const deepgramCost = (segmentMin + retranscribeMin) * DEEPGRAM_PER_MIN;
     const noteTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
     s = createSpinner('Salvando nota...').start();

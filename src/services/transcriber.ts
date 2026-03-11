@@ -32,6 +32,11 @@ interface DeepgramResponse {
   };
 }
 
+export interface TranscribeOptions {
+  diarize?: boolean;
+  model?: string;
+}
+
 // Apply speaker name mapping from config
 function applySpeakerNames(text: string, config: Config): string {
   const names = config.speakerNames;
@@ -121,60 +126,8 @@ async function callDeepgram(audioBuffer: Buffer, contentType: string, params: UR
   return data;
 }
 
-// Fast mode: for live segments — no diarization, fast response
-export async function transcribeFile(filePath: string, config: Config): Promise<string> {
-  if (!config.deepgramApiKey) {
-    throw new Error('deepgramApiKey nao configurado. Run: meeting config');
-  }
-
-  const audioBuffer = fs.readFileSync(filePath);
-  const contentType = detectContentType(filePath);
-
-  const params = new URLSearchParams({
-    model: config.deepgramModel || 'nova-2',
-    punctuate: 'true',
-    smart_format: 'true',
-    language: 'pt',
-  });
-
-  const data = await callDeepgram(audioBuffer, contentType, params, config);
-  return formatPlain(data);
-}
-
-// Full mode: for final transcription — diarization + speaker names + nova-3
-export async function transcribeFull(filePath: string, config: Config): Promise<string> {
-  if (!config.deepgramApiKey) {
-    throw new Error('deepgramApiKey nao configurado. Run: meeting config');
-  }
-
-  const audioBuffer = fs.readFileSync(filePath);
-  const contentType = detectContentType(filePath);
-
-  // Detect if audio is stereo (multichannel: L=system/remote, R=mic/local)
-  const channels = audioBuffer.readUInt16LE(22); // WAV header: offset 22 = numChannels
-  const isStereo = channels === 2;
-
-  const params = new URLSearchParams({
-    model: 'nova-3',
-    punctuate: 'true',
-    smart_format: 'true',
-    language: 'pt',
-  });
-
-  // Always enable diarization + utterances (works alongside multichannel)
-  params.set('diarize', 'true');
-  params.set('utterances', 'true');
-
-  if (isStereo) {
-    // Multichannel: Deepgram processes each channel independently
-    // Channel 0 = system audio (remote participants) — diarize separates multiple remotes
-    // Channel 1 = mic audio (local user)
-    params.set('multichannel', 'true');
-  }
-
-  const data = await callDeepgram(audioBuffer, contentType, params, config);
-
-  // Resolve local speaker name from config
+// Format diarized transcription with speaker labels and multichannel support
+function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isStereo: boolean): string {
   const localSpeaker = config.speakerNames?.['local']
     || Object.values(config.speakerNames || {}).find(n => /gabriel/i.test(n))
     || 'Voce';
@@ -182,8 +135,6 @@ export async function transcribeFull(filePath: string, config: Config): Promise<
   let text: string;
   if (isStereo && data.results.channels && data.results.channels.length >= 2) {
     // Multichannel + diarization: interleave both channels by timestamp
-    // Channel 0 words get speaker labels from diarization (multiple remote speakers)
-    // Channel 1 words are always the local user
     const remoteWords = (data.results.channels[0]?.alternatives?.[0]?.words || [])
       .map((w: DeepgramWord) => ({ ...w, channel: 0 }));
     const localWords = (data.results.channels[1]?.alternatives?.[0]?.words || [])
@@ -191,9 +142,8 @@ export async function transcribeFull(filePath: string, config: Config): Promise<
 
     const allWords = [...remoteWords, ...localWords].sort((a, b) => a.start - b.start);
 
-    // Group consecutive words from same speaker/channel
     const lines: string[] = [];
-    let currentKey = ''; // "ch0-sp1" or "ch1-local"
+    let currentKey = '';
     let currentWords: string[] = [];
 
     for (const w of allWords) {
@@ -216,12 +166,46 @@ export async function transcribeFull(filePath: string, config: Config): Promise<
     text = formatDiarized(data.results.utterances);
   } else {
     const words = data.results.channels?.[0]?.alternatives?.[0]?.words;
-    if (words && words.length > 0) {
-      text = formatFromWords(words);
-    } else {
-      text = formatPlain(data);
-    }
+    text = (words && words.length > 0) ? formatFromWords(words) : formatPlain(data);
   }
 
   return applySpeakerNames(text, config);
+}
+
+// Unified transcription: supports plain (fast) and diarized (full) modes
+export async function transcribeFile(filePath: string, config: Config, options?: TranscribeOptions): Promise<string> {
+  if (!config.deepgramApiKey) {
+    throw new Error('deepgramApiKey nao configurado. Run: meeting config');
+  }
+
+  const diarize = options?.diarize ?? false;
+  const model = options?.model || config.deepgramModel || 'nova-2';
+
+  const audioBuffer = fs.readFileSync(filePath);
+  const contentType = detectContentType(filePath);
+  const channels = audioBuffer.readUInt16LE(22);
+  const isStereo = channels === 2;
+
+  const params = new URLSearchParams({
+    model,
+    punctuate: 'true',
+    smart_format: 'true',
+    language: 'pt',
+  });
+
+  if (diarize) {
+    params.set('diarize', 'true');
+    params.set('utterances', 'true');
+    if (isStereo) {
+      params.set('multichannel', 'true');
+    }
+  }
+
+  const data = await callDeepgram(audioBuffer, contentType, params, config);
+  return diarize ? formatDiarizedTranscription(data, config, isStereo) : formatPlain(data);
+}
+
+// Convenience: full diarized transcription with nova-3
+export async function transcribeFull(filePath: string, config: Config): Promise<string> {
+  return transcribeFile(filePath, config, { diarize: true, model: 'nova-3' });
 }
