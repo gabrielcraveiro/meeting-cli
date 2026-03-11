@@ -5,7 +5,7 @@ import { spawn, ChildProcess } from 'child_process';
 import chalk from 'chalk';
 import { createSpinner } from 'nanospinner';
 import boxen from 'boxen';
-import gradient from 'gradient-string';
+// gradient-string no longer needed — TUI header handles branding
 import { requireConfig } from '../config';
 import { transcribeFile, transcribeFull } from '../services/transcriber';
 import { organizeTranscript, chatWithMeetings } from '../services/organizer';
@@ -83,30 +83,157 @@ function mergeWavSegments(segmentPaths: string[], outputPath: string): void {
   fs.writeFileSync(outputPath, Buffer.concat([header, ...pcmChunks]));
 }
 
-// ── Terminal UI (simple flowing output) ──────────────────────────
-// No alt screen, no scroll regions — just normal stdout.
-// Scrollback preserved, scroll/resize safe.
+// ── Terminal UI with fixed header/footer and scroll region ───────
+// Uses ANSI escape codes (VT100) for persistent status display.
+// Header: recording status, timer, segments, cost
+// Footer: input bar with commands hint
+// Middle: scroll region for transcript, insights, chat
+
+const ESC = '\x1b[';
 
 class TerminalUI {
-  init() {}
+  private rows = process.stdout.rows || 24;
+  private cols = process.stdout.columns || 80;
+  private headerLines = 3;  // header occupies top 3 lines
+  private footerLines = 1;  // input bar at bottom
+  private active = false;
+  private currentTime = '00:00';
+  private currentSegments = 0;
+  private currentCost = 0;
+  private currentExtra = '';
+  private templateLabel = '';
+  private topicLabel = '';
 
-  drawStatusBar(_time: string, _segments: number, _extra?: string) {
-    // No-op: status is shown inline with appendLine
+  init() {
+    this.rows = process.stdout.rows || 24;
+    this.cols = process.stdout.columns || 80;
+    this.active = true;
+
+    // Hide cursor during UI
+    process.stdout.write(`${ESC}?25l`);
+
+    // Clear screen and draw initial layout
+    process.stdout.write(`${ESC}2J${ESC}H`);
+
+    this._drawHeader();
+    this._setScrollRegion();
+    this._drawFooter();
+
+    // Move cursor to scroll region
+    this._moveCursorToScroll();
+
+    // Handle terminal resize
+    process.stdout.on('resize', () => {
+      this.rows = process.stdout.rows || 24;
+      this.cols = process.stdout.columns || 80;
+      this._setScrollRegion();
+      this._drawHeader();
+      this._drawFooter();
+      this._moveCursorToScroll();
+    });
   }
 
-  drawInputBar(_hint?: string) {}
+  setLabels(template: string, topic: string) {
+    this.templateLabel = template;
+    this.topicLabel = topic;
+  }
 
-  // Print a line — simple, no cursor tricks
+  private _setScrollRegion() {
+    const scrollTop = this.headerLines + 1;
+    const scrollBottom = this.rows - this.footerLines;
+    process.stdout.write(`${ESC}${scrollTop};${scrollBottom}r`);
+  }
+
+  private _drawHeader() {
+    if (!this.active) return;
+    // Save cursor position
+    process.stdout.write(`${ESC}s`);
+
+    const recording = chalk.red.bold(' ● REC');
+    const time = chalk.white.bold(this.currentTime);
+    const segs = chalk.gray(`${this.currentSegments} seg`);
+    const cost = chalk.gray(`$${this.currentCost.toFixed(4)}`);
+    const extra = this.currentExtra ? chalk.yellow(` ${this.currentExtra}`) : '';
+
+    // Line 1: main status bar
+    process.stdout.write(`${ESC}1;1H${ESC}2K`);
+    const line1 = `${recording}  ${time}  │  ${segs}  │  ${cost}${extra}`;
+    process.stdout.write(line1);
+
+    // Line 2: labels (template, topic, mics)
+    process.stdout.write(`${ESC}2;1H${ESC}2K`);
+    const parts: string[] = [];
+    if (this.templateLabel) parts.push(chalk.magenta(this.templateLabel));
+    if (this.topicLabel) parts.push(chalk.cyan(`⟨${this.topicLabel}⟩`));
+    parts.push(chalk.green('Mic: ✔') + '  ' + chalk.green('System: ✔'));
+    process.stdout.write(`  ${parts.join('  │  ')}`);
+
+    // Line 3: separator
+    process.stdout.write(`${ESC}3;1H${ESC}2K`);
+    process.stdout.write(chalk.gray('─'.repeat(Math.min(this.cols, 80))));
+
+    // Restore cursor position
+    process.stdout.write(`${ESC}u`);
+  }
+
+  private _drawFooter(hint?: string) {
+    if (!this.active) return;
+    process.stdout.write(`${ESC}s`);
+    const footerRow = this.rows;
+    process.stdout.write(`${ESC}${footerRow};1H${ESC}2K`);
+    const commands = chalk.gray('/stop  /help  /ctx');
+    const prompt = hint || chalk.bold.green('Você: ');
+    process.stdout.write(`${commands}${' '.repeat(Math.max(2, this.cols - 40))}${prompt}`);
+    process.stdout.write(`${ESC}u`);
+  }
+
+  private _moveCursorToScroll() {
+    const scrollBottom = this.rows - this.footerLines;
+    process.stdout.write(`${ESC}${scrollBottom};1H`);
+  }
+
+  drawStatusBar(time: string, segments: number, extra?: string) {
+    this.currentTime = time;
+    this.currentSegments = segments;
+    if (extra !== undefined) this.currentExtra = extra;
+    this._drawHeader();
+  }
+
+  updateCost(cost: number) {
+    this.currentCost = cost;
+    this._drawHeader();
+  }
+
+  drawInputBar(hint?: string) {
+    this._drawFooter(hint);
+  }
+
   appendLine(text: string) {
-    console.log(text);
+    if (!this.active) {
+      console.log(text);
+      return;
+    }
+    // Write to scroll region — terminal handles scrolling automatically
+    this._moveCursorToScroll();
+    process.stdout.write(`${text}\n`);
   }
 
-  // Show a status separator (only when content arrives, not on timer)
   showStatus(time: string, segments: number) {
-    console.log(chalk.dim(`  ── ${time} | ${segments} seg ──`));
+    this.currentTime = time;
+    this.currentSegments = segments;
+    this._drawHeader();
   }
 
-  teardown() {}
+  teardown() {
+    if (!this.active) return;
+    this.active = false;
+    // Reset scroll region to full terminal
+    process.stdout.write(`${ESC}r`);
+    // Show cursor
+    process.stdout.write(`${ESC}?25h`);
+    // Move to bottom
+    process.stdout.write(`${ESC}${this.rows};1H\n`);
+  }
 }
 
 const INSIGHT_PROMPT = `Voce esta acompanhando uma reuniao em tempo real. Analise a transcricao e extraia APENAS os pontos mais importantes.
@@ -123,8 +250,10 @@ Regras:
 - Se nada relevante: (sem pontos relevantes ainda)
 - Portugues`;
 
-export async function cmdStart(opts: { template?: string } = {}): Promise<void> {
+export async function cmdStart(topicArg?: string, opts: { template?: string } = {}): Promise<void> {
   const config = requireConfig();
+
+  const topic = typeof topicArg === 'string' ? topicArg.trim() : '';
 
   const templateName = opts.template || 'default';
   const template = getTemplate(templateName);
@@ -180,6 +309,9 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
 
   const ui = new TerminalUI();
   const chatHistory: Array<{ role: string; content: string }> = [];
+
+  // Context system: auto-loaded + user-added via /ctx + topic-based
+  const extraContext: string[] = [];
 
   function showTimestamp() {
     ui.showStatus(formatTime(elapsedSec), processedSegments.size);
@@ -585,9 +717,9 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     const tagInstruction = '\n\nApos a nota, adicione uma ultima linha no formato exato:\nTags: tag1, tag2, tag3\n(maximo 5 tags relevantes: backend, frontend, deploy, produto, financeiro, dados, infraestrutura, seguranca, design, planejamento, retrospectiva, daily, 1on1)';
     const finalPrompt = adaptiveWrapper + basePrompt + tagInstruction;
 
-    const templateLabel = effectiveTemplate && effectiveTemplate.name !== 'default' ? ` ${effectiveTemplate.label}` : '';
+    const tplLabel = effectiveTemplate && effectiveTemplate.name !== 'default' ? ` ${effectiveTemplate.label}` : '';
     const adaptiveLabel = durationSec < 120 ? ' (quick)' : durationSec < 600 ? ' (short)' : durationSec > 1800 ? ' (deep)' : '';
-    s = createSpinner(`Organizando com IA${templateLabel}${adaptiveLabel}...`).start();
+    s = createSpinner(`Organizando com IA${tplLabel}${adaptiveLabel}...`).start();
     let summary = '';
     let chatCost = 0;
     let inputTokens = 0;
@@ -737,17 +869,70 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
   }
 
   // ── Init UI ──
-  console.log('\n' + gradient(['#ff6b6b', '#ffd93d', '#6bcb77'])('  Meeting CLI') + chalk.gray(' v1.1.0'));
-  console.log(chalk.gray('  /stop = parar  |  /help = comandos  |  digite = chat ao vivo\n'));
+  const templateLabel = template && template.name !== 'default' ? template.label : '';
+  ui.setLabels(templateLabel, topic);
   ui.init();
 
-  if (template && template.name !== 'default') {
-    ui.appendLine(chalk.magenta(`  Template: ${template.label}`));
+  // Topic-based context: search past meetings BEFORE recording starts
+  if (topic) {
+    ui.appendLine(chalk.cyan(`  Buscando contexto para "${topic}"...`));
+    try {
+      const allSummaries = loadMeetingSummaries(config, 15);
+      if (allSummaries.length > 0) {
+        const index = allSummaries.map((m, i) => {
+          const lines = m.split('\n');
+          const dateLine = lines[0];
+          const content = lines.slice(1)
+            .filter(l => l.trim() && !l.startsWith('##') && !l.startsWith('Participantes:'))
+            .slice(0, 2).join(' ').replace(/\*\*/g, '').slice(0, 120);
+          return `[${i}] ${dateLine} — ${content}`;
+        }).join('\n');
+
+        const messages = [
+          {
+            role: 'system',
+            content: 'Voce recebe um topico/projeto e uma lista de reunioes passadas. '
+              + 'Retorne APENAS os numeros (indices) das reunioes que sao semanticamente relevantes para o topico. '
+              + 'Considere: mesmo projeto, temas relacionados, continuidade de decisoes. '
+              + 'Formato: numeros separados por virgula (ex: 0,3,7). Se nenhuma for relevante, retorne: nenhuma',
+          },
+          {
+            role: 'user',
+            content: `# Topico: ${topic}\n\n# Reunioes passadas\n${index}`,
+          },
+        ];
+
+        const response = await chatWithMeetings(messages, config);
+        const trimmed = response.trim().toLowerCase();
+
+        if (trimmed !== 'nenhuma' && trimmed !== 'nenhum') {
+          const indices = trimmed.split(/[,\s]+/)
+            .map(s => parseInt(s.replace(/[^\d]/g, '')))
+            .filter(n => !isNaN(n) && n >= 0 && n < allSummaries.length);
+
+          if (indices.length > 0) {
+            const relevant = indices.map(i => allSummaries[i]);
+            extraContext.push('# Reunioes relacionadas (topico: ' + topic + ')\n' + relevant.join('\n---\n'));
+            semanticContextLoaded = true;
+
+            ui.appendLine(chalk.green(`  ${indices.length} reuniao(oes) relacionada(s) carregada(s):`));
+            for (const i of indices) {
+              const dateLine = allSummaries[i].split('\n')[0];
+              ui.appendLine(chalk.gray(`    ${dateLine}`));
+            }
+          } else {
+            ui.appendLine(chalk.gray('  Nenhuma reuniao anterior sobre este topico.'));
+          }
+        } else {
+          ui.appendLine(chalk.gray('  Nenhuma reuniao anterior sobre este topico.'));
+        }
+      }
+    } catch {
+      ui.appendLine(chalk.yellow('  Busca de contexto falhou — continuando sem contexto previo.'));
+    }
+    ui.appendLine('');
   }
 
-  // Semantic context: loaded after first transcription (see loadSemanticContext below)
-
-  ui.appendLine('');
   ui.appendLine(chalk.gray('  Iniciando captura WASAPI...'));
   ui.appendLine('');
 
@@ -830,9 +1015,15 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     }
   });
 
-  // Timer — status bar update + safety limits
+  // Timer — header update + safety limits
   timerInterval = setInterval(() => {
     elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+
+    // Update header with current time and live cost estimate
+    const segMin = (transcribedSegments * SEGMENT_SECONDS) / 60;
+    const liveCost = segMin * DEEPGRAM_PER_MIN;
+    ui.drawStatusBar(formatTime(elapsedSec), processedSegments.size);
+    ui.updateCost(liveCost);
 
     if (!warned30 && elapsedSec >= WARN_SECONDS) {
       warned30 = true;
@@ -867,10 +1058,7 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     prompt: '',
   });
 
-  // Context system: auto-loaded + user-added via /ctx
-  const extraContext: string[] = [];
-
-  // Semantic context: injected after first transcription (not upfront)
+  // Semantic context: injected after first transcription (not upfront) or pre-loaded via topic
 
   function buildSystemMsg(): string {
     const currentTranscript = transcriptLines.join('\n');
@@ -907,12 +1095,18 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     }
 
     if (cmd === 'help' || cmd === 'ajuda') {
-      ui.appendLine(chalk.gray('  /stop          — para a gravacao'));
-      ui.appendLine(chalk.gray('  /ctx <arquivo> — adiciona arquivo do vault como contexto'));
-      ui.appendLine(chalk.gray('  /ctx <texto>   — adiciona texto livre como contexto'));
-      ui.appendLine(chalk.gray('  /contexto      — mostra contextos carregados'));
-      ui.appendLine(chalk.gray('  /help          — mostra comandos'));
-      ui.appendLine(chalk.gray('  <texto>        — pergunta a IA sobre a reuniao'));
+      ui.appendLine('');
+      ui.appendLine(chalk.bold('  Comandos durante gravação:'));
+      ui.appendLine('');
+      ui.appendLine(`  ${chalk.green('/stop')}              Para a gravação e finaliza`);
+      ui.appendLine(`  ${chalk.green('/ctx')} ${chalk.cyan('<arquivo>')}     Adiciona arquivo do vault como contexto`);
+      ui.appendLine(`  ${chalk.green('/ctx')} ${chalk.cyan('<texto>')}       Adiciona texto livre como contexto`);
+      ui.appendLine(`  ${chalk.green('/contexto')}          Mostra contextos carregados`);
+      ui.appendLine(`  ${chalk.green('/help')}              Mostra este menu`);
+      ui.appendLine('');
+      ui.appendLine(chalk.gray('  Digite qualquer texto para perguntar à IA sobre a reunião.'));
+      ui.appendLine(chalk.gray('  A IA tem acesso à transcrição em tempo real + contextos carregados.'));
+      ui.appendLine('');
       return;
     }
 

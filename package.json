@@ -1,6 +1,6 @@
 {
   "name": "@gabrielcraveiro/meeting-cli",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "CLI tool for recording, transcribing, and organizing meeting notes with AI — live chat, auto-insights, and Obsidian integration",
   "author": "Gabriel Craveiro",
   "license": "MIT",

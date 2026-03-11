@@ -1,4 +1,6 @@
 import { Command } from 'commander';
+import chalk from 'chalk';
+import gradient from 'gradient-string';
 import { cmdStart } from './commands/start';
 import { cmdList } from './commands/list';
 import { cmdSummary } from './commands/summary';
@@ -16,10 +18,51 @@ const program = new Command();
 program
   .name('meeting')
   .description('CLI para gravação, transcrição e chat com reuniões')
-  .version('1.2.0');
+  .version('1.4.0');
+
+// ── Custom help ──────────────────────────────────────────────
+// Override help only for the root command — subcommands use default Commander help
+program.addHelpText('beforeAll', '');
+program.helpInformation = function () {
+  const title = gradient(['#ff6b6b', '#ffd93d', '#6bcb77'])('  Meeting CLI');
+  const ver = chalk.gray('v1.4.0');
+
+  const sections = [
+    '',
+    `${title}  ${ver}`,
+    chalk.gray('  Grave, transcreva e converse com suas reuniões direto do terminal.'),
+    '',
+    chalk.bold('  Gravação'),
+    `    ${chalk.green('meeting start')}                    Inicia gravação com transcrição ao vivo`,
+    `    ${chalk.green('meeting start')} ${chalk.cyan('<tópico>')}           Grava com contexto pré-carregado`,
+    `    ${chalk.green('meeting start')} ${chalk.yellow('-t daily')}          Usa template de daily standup`,
+    `    ${chalk.green('meeting transcribe')} ${chalk.cyan('<arquivo>')}     Transcreve áudio existente`,
+    '',
+    chalk.bold('  Consulta'),
+    `    ${chalk.green('meeting list')}                     Lista reuniões gravadas`,
+    `    ${chalk.green('meeting summary')}                  Mostra resumos recentes`,
+    `    ${chalk.green('meeting search')} ${chalk.cyan('"deploy"')}          Busca por texto nas reuniões`,
+    `    ${chalk.green('meeting search')} ${chalk.yellow('--smart')} ${chalk.cyan('"deploy"')}  Busca semântica com IA`,
+    `    ${chalk.green('meeting chat')}                     Chat interativo sobre reuniões`,
+    '',
+    chalk.bold('  Sistema'),
+    `    ${chalk.green('meeting config')}                   Assistente de configuração`,
+    `    ${chalk.green('meeting status')}                   Mostra configuração atual`,
+    `    ${chalk.green('meeting doctor')}                   Diagnostica problemas`,
+    `    ${chalk.green('meeting stats')}                    Estatísticas e dashboard`,
+    `    ${chalk.green('meeting setup')}                    Instala sidecar WASAPI`,
+    `    ${chalk.green('meeting templates')}                Lista templates disponíveis`,
+    '',
+    chalk.gray('  Durante gravação:  /stop  /help  /ctx <arquivo>  ou digite para chat ao vivo'),
+    '',
+  ];
+
+  return sections.join('\n');
+};
 
 program
   .command('start')
+  .argument('[topic]', 'Tópico ou projeto para pré-carregar contexto de reuniões anteriores')
   .description('Inicia gravação de reunião com transcrição ao vivo')
   .option('-t, --template <name>', 'Template de reunião (daily, 1on1, retro, planning, technical)')
   .action(cmdStart);
@@ -35,6 +78,7 @@ program
   .command('search <query>')
   .description('Busca em todas as reuniões')
   .option('-n, --limit <n>', 'Número máximo de resultados', '10')
+  .option('--smart', 'Busca semântica com IA (encontra significado, não só texto)')
   .action(cmdSearch);
 
 program
@@ -62,10 +106,10 @@ program
   .action(() => {
     console.log('\n📋 Templates disponíveis:\n');
     for (const t of listTemplates()) {
-      console.log(`  ${t.name.padEnd(12)} ${t.label.padEnd(16)} ${t.description}`);
+      console.log(`  ${chalk.green(t.name.padEnd(12))} ${chalk.bold(t.label.padEnd(16))} ${chalk.gray(t.description)}`);
     }
-    console.log('\nUso: meeting start --template daily');
-    console.log('     meeting transcribe audio.wav --template retro\n');
+    console.log(`\n  ${chalk.gray('Uso:')} meeting start --template daily`);
+    console.log(`       meeting transcribe audio.wav --template retro\n`);
   });
 
 program
@@ -96,18 +140,18 @@ program
   .action(() => {
     const cfg = loadConfig();
     if (!cfg) {
-      console.log('❌ Sem configuração. Run: meeting config');
+      console.log(chalk.red('❌ Sem configuração. Rode: meeting config'));
       return;
     }
     const sidecarOk = isSidecarInstalled();
-    console.log('\n📋 Configuração atual:\n');
-    console.log(`  Sidecar:     ${sidecarOk ? '✓ instalado' : '✗ não instalado (rode: meeting setup)'}`);
-    console.log(`  Vault:       ${cfg.vaultPath}`);
-    console.log(`  Áudio:       WASAPI Loopback (captura do output padrão do Windows)`);
-    console.log(`  Mic Device:  ${cfg.micDeviceId || '(padrão do sistema)'}`);
-    console.log(`  Mic Gain:    ${cfg.micGain ?? 1.0}`);
-    console.log(`  Deepgram:    ${cfg.deepgramModel || 'nova-2'} | key: ${cfg.deepgramApiKey ? '***' + cfg.deepgramApiKey.slice(-4) : '(não configurado)'}`);
-    console.log(`  Chat:        ${cfg.chatModel || 'gpt-4o-mini'} @ ${(cfg.chatEndpoint || '').slice(0, 40)}`);
+    console.log('\n' + gradient(['#ff6b6b', '#ffd93d', '#6bcb77'])('  Meeting CLI') + chalk.gray(' Status\n'));
+    console.log(`  ${chalk.bold('Sidecar')}     ${sidecarOk ? chalk.green('✓ instalado') : chalk.red('✗ não instalado (rode: meeting setup)')}`);
+    console.log(`  ${chalk.bold('Vault')}       ${cfg.vaultPath}`);
+    console.log(`  ${chalk.bold('Áudio')}       WASAPI Loopback (captura do output padrão do Windows)`);
+    console.log(`  ${chalk.bold('Mic Device')}  ${cfg.micDeviceId || chalk.gray('(padrão do sistema)')}`);
+    console.log(`  ${chalk.bold('Mic Gain')}    ${cfg.micGain ?? 1.0}`);
+    console.log(`  ${chalk.bold('Deepgram')}    ${cfg.deepgramModel || 'nova-2'} | key: ${cfg.deepgramApiKey ? '***' + cfg.deepgramApiKey.slice(-4) : chalk.red('(não configurado)')}`);
+    console.log(`  ${chalk.bold('Chat')}        ${cfg.chatModel || 'gpt-4o-mini'} @ ${(cfg.chatEndpoint || '').slice(0, 40)}`);
     console.log('');
   });
 
