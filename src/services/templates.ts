@@ -147,6 +147,30 @@ export const TEMPLATES: Record<string, MeetingTemplate> = {
       '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
       SHARED_RULES,
   },
+
+  knowledge: {
+    name: 'knowledge',
+    label: 'Conhecimento',
+    description: 'Sessão de conhecimento — onboarding, explicação de domínio, treinamento',
+    prompt:
+      'You are a domain knowledge analyst. You receive a transcript of a knowledge transfer / onboarding / training session.\n\n' +
+      'Your goal is to CAPTURE ALL DOMAIN KNOWLEDGE explained, structured for future reference. This is NOT a status meeting — the value is in the concepts, rules and flows explained.\n\n' +
+      'Produce a structured note in Portuguese (Brazil):\n\n' +
+      '## Resumo\n2-4 sentences: what domain/system was explained, who was teaching, who was learning.\n\n' +
+      '## Glossario\nBulleted list of domain terms defined or explained in the conversation. Format:\n' +
+      '- **Term**: definition/explanation as described in the meeting\n' +
+      'Include ALL terms, even if they seem obvious — this note serves as reference.\n\n' +
+      '## Regras de Negocio\nBulleted list of business rules, constraints, and conditions explained. Be SPECIFIC — include percentages, limits, exceptions, edge cases. Format:\n' +
+      '- Rule description with concrete examples when given\n\n' +
+      '## Fluxos\nDescribe each workflow/process explained. Use numbered steps or sub-bullets. Include:\n' +
+      '- The happy path\n' +
+      '- Variations and exceptions mentioned\n' +
+      '- Which system/team handles each step\n\n' +
+      '## Exemplos Citados\nSpecific real-world examples given during the explanation (company names, products, scenarios). These are valuable for understanding the rules in practice.\n\n' +
+      '## Pontos de Atencao\nGotchas, edge cases, "cuidado com isso", historical context ("isso foi discutido em 2025 mas caiu"). Things that are easy to get wrong.\n\n' +
+      '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
+      SHARED_RULES,
+  },
 };
 
 export function getTemplate(name: string): MeetingTemplate | null {

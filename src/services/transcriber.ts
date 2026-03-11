@@ -70,6 +70,18 @@ function formatFromWords(words: DeepgramWord[]): string {
   return lines.join('\n');
 }
 
+// Map remote speaker key ("remote-0", "remote-1") to a display name
+// Uses config.speakerNames for known mappings, otherwise "Remoto N"
+function formatRemoteSpeaker(key: string, config: Config): string {
+  const speakerNum = key.replace('remote-', '');
+  const names = config.speakerNames || {};
+  // Check for direct mapping: "Speaker 0" -> "Lucas", etc.
+  if (names[`Speaker ${speakerNum}`]) return names[`Speaker ${speakerNum}`];
+  // Check for "remote-0" style mapping
+  if (names[key]) return names[key];
+  return `Remoto ${speakerNum}`;
+}
+
 function formatPlain(data: DeepgramResponse): string {
   return data.results.channels?.[0]?.alternatives?.[0]?.transcript?.trim() || '';
 }
@@ -149,60 +161,57 @@ export async function transcribeFull(filePath: string, config: Config): Promise<
     language: 'pt',
   });
 
+  // Always enable diarization + utterances (works alongside multichannel)
+  params.set('diarize', 'true');
+  params.set('utterances', 'true');
+
   if (isStereo) {
-    // Multichannel mode: Deepgram processes each channel independently
-    // Channel 0 = system audio (remote participants)
+    // Multichannel: Deepgram processes each channel independently
+    // Channel 0 = system audio (remote participants) — diarize separates multiple remotes
     // Channel 1 = mic audio (local user)
     params.set('multichannel', 'true');
-  } else {
-    // Mono fallback: use diarization to separate speakers
-    params.set('diarize', 'true');
-    params.set('diarize_version', '2024-11-01');
-    params.set('utterances', 'true');
   }
 
   const data = await callDeepgram(audioBuffer, contentType, params, config);
 
+  // Resolve local speaker name from config
+  const localSpeaker = config.speakerNames?.['local']
+    || Object.values(config.speakerNames || {}).find(n => /gabriel/i.test(n))
+    || 'Voce';
+
   let text: string;
   if (isStereo && data.results.channels && data.results.channels.length >= 2) {
-    // Multichannel: merge both channels with speaker labels
-    const remoteText = data.results.channels[0]?.alternatives?.[0]?.transcript?.trim() || '';
-    const localText = data.results.channels[1]?.alternatives?.[0]?.transcript?.trim() || '';
+    // Multichannel + diarization: interleave both channels by timestamp
+    // Channel 0 words get speaker labels from diarization (multiple remote speakers)
+    // Channel 1 words are always the local user
+    const remoteWords = (data.results.channels[0]?.alternatives?.[0]?.words || [])
+      .map((w: DeepgramWord) => ({ ...w, channel: 0 }));
+    const localWords = (data.results.channels[1]?.alternatives?.[0]?.words || [])
+      .map((w: DeepgramWord) => ({ ...w, channel: 1 }));
 
-    // Get word-level data for proper interleaving by timestamp
-    const remoteWords = data.results.channels[0]?.alternatives?.[0]?.words || [];
-    const localWords = data.results.channels[1]?.alternatives?.[0]?.words || [];
+    const allWords = [...remoteWords, ...localWords].sort((a, b) => a.start - b.start);
 
-    // Build utterances from word groups, interleaved by time
-    const allWords = [
-      ...remoteWords.map((w: DeepgramWord) => ({ ...w, channel: 0 })),
-      ...localWords.map((w: DeepgramWord) => ({ ...w, channel: 1 })),
-    ].sort((a, b) => a.start - b.start);
-
-    // Group consecutive words from same channel
+    // Group consecutive words from same speaker/channel
     const lines: string[] = [];
-    let currentChannel = -1;
+    let currentKey = ''; // "ch0-sp1" or "ch1-local"
     let currentWords: string[] = [];
-    const localSpeaker = config.speakerNames?.['Speaker 1'] || config.speakerNames?.['local'] || 'Voce';
-    const remoteSpeaker = '[Remoto]';
 
     for (const w of allWords) {
-      if (w.channel !== currentChannel) {
+      const key = w.channel === 1 ? 'local' : `remote-${w.speaker ?? 0}`;
+      if (key !== currentKey) {
         if (currentWords.length > 0) {
-          const label = currentChannel === 1 ? `[${localSpeaker}]` : remoteSpeaker;
-          lines.push(`${label} ${currentWords.join(' ')}`);
+          lines.push(`[${currentKey === 'local' ? localSpeaker : formatRemoteSpeaker(currentKey, config)}] ${currentWords.join(' ')}`);
         }
-        currentChannel = w.channel;
+        currentKey = key;
         currentWords = [];
       }
       currentWords.push(w.punctuated_word || w.word);
     }
     if (currentWords.length > 0) {
-      const label = currentChannel === 1 ? `[${localSpeaker}]` : remoteSpeaker;
-      lines.push(`${label} ${currentWords.join(' ')}`);
+      lines.push(`[${currentKey === 'local' ? localSpeaker : formatRemoteSpeaker(currentKey, config)}] ${currentWords.join(' ')}`);
     }
 
-    text = lines.length > 0 ? lines.join('\n') : (remoteText || localText);
+    text = lines.length > 0 ? lines.join('\n') : formatPlain(data);
   } else if (data.results.utterances && data.results.utterances.length > 0) {
     text = formatDiarized(data.results.utterances);
   } else {

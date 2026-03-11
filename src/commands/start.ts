@@ -172,6 +172,7 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
   let insightBusy = false;
   let chatBusy = false;
   let consecutiveSilentSegments = 0;
+  let semanticContextLoaded = false;
   const segmentRmsDb: Map<number, number> = new Map();
 
   const ui = new TerminalUI();
@@ -192,6 +193,11 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
 
       const line = `${formatTimestamp(offsetSec)} ${text}`;
       transcriptLines.push(line);
+
+      // After first transcription, load semantically relevant past meetings
+      if (!semanticContextLoaded) {
+        loadSemanticContext(); // fire-and-forget, non-blocking
+      }
 
       // Show each speaker line separately for readability
       for (const speakerLine of text.split('\n')) {
@@ -276,6 +282,69 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     }
 
     insightBusy = false;
+  }
+
+  // Semantic context: after first transcription, find relevant past meetings
+  async function loadSemanticContext() {
+    if (semanticContextLoaded || transcriptLines.length === 0) return;
+    semanticContextLoaded = true;
+
+    try {
+      const allSummaries = loadMeetingSummaries(config, 15);
+      if (allSummaries.length === 0) return;
+
+      // Build a compact index: [index] date — first line of summary
+      const index = allSummaries.map((m, i) => {
+        const lines = m.split('\n');
+        const dateLine = lines[0]; // [YYYY-MM-DD HH:MM]
+        const content = lines.slice(1)
+          .filter(l => l.trim() && !l.startsWith('##') && !l.startsWith('Participantes:'))
+          .slice(0, 2).join(' ').replace(/\*\*/g, '').slice(0, 120);
+        return `[${i}] ${dateLine} — ${content}`;
+      }).join('\n');
+
+      const currentSnippet = transcriptLines.slice(0, 5).join('\n');
+
+      const messages = [
+        {
+          role: 'system',
+          content: 'Voce recebe uma transcricao parcial de uma reuniao em andamento e uma lista de reunioes passadas. '
+            + 'Retorne APENAS os numeros (indices) das reunioes que sao semanticamente relevantes para o contexto atual. '
+            + 'Considere: mesmo projeto, mesmos participantes, mesmo tema, continuidade de decisoes. '
+            + 'Formato: numeros separados por virgula (ex: 0,3,7). Se nenhuma for relevante, retorne: nenhuma',
+        },
+        {
+          role: 'user',
+          content: `# Reuniao em andamento\n${currentSnippet}\n\n# Reunioes passadas\n${index}`,
+        },
+      ];
+
+      const response = await chatWithMeetings(messages, config);
+      const trimmed = response.trim().toLowerCase();
+
+      if (trimmed === 'nenhuma' || trimmed === 'nenhum') return;
+
+      const indices = trimmed.split(/[,\s]+/)
+        .map(s => parseInt(s.replace(/[^\d]/g, '')))
+        .filter(n => !isNaN(n) && n >= 0 && n < allSummaries.length);
+
+      if (indices.length === 0) return;
+
+      const relevant = indices.map(i => allSummaries[i]);
+      extraContext.push('# Reunioes relacionadas\n' + relevant.join('\n---\n'));
+
+      // Show which meetings were loaded
+      const labels = indices.map(i => {
+        const dateLine = allSummaries[i].split('\n')[0];
+        return dateLine;
+      });
+      ui.appendLine(chalk.gray(`  Contexto: ${labels.length} reuniao(oes) relacionada(s) carregada(s)`));
+      for (const label of labels) {
+        ui.appendLine(chalk.gray(`    ${label}`));
+      }
+    } catch {
+      // semantic context is optional — don't block recording
+    }
   }
 
   // Retroactive trim: calculate RMS from WAV file and strip silent trailing segments
@@ -446,7 +515,7 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
       const sd = createSpinner('Detectando tipo de reuniao...').start();
       try {
         const detectMessages = [
-          { role: 'system', content: 'Analise esta transcricao e responda com UMA UNICA PALAVRA: daily, 1on1, retro, planning, technical, ou default. Nenhuma outra palavra.' },
+          { role: 'system', content: 'Analise esta transcricao e responda com UMA UNICA PALAVRA: daily, 1on1, retro, planning, technical, knowledge, ou default.\n\nUse "knowledge" quando a reuniao for de onboarding, treinamento, explicacao de dominio/sistema, transferencia de conhecimento — quando alguem esta ENSINANDO conceitos, regras de negocio, fluxos.\n\nNenhuma outra palavra.' },
           { role: 'user', content: fullTranscript.slice(0, 2000) },
         ];
         const detected = (await chatWithMeetings(detectMessages, config)).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -625,32 +694,7 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
     ui.appendLine(chalk.magenta(`  Template: ${template.label}`));
   }
 
-  // Meeting briefing
-  try {
-    const recentMeetings = loadMeetingSummaries(config, 3);
-    if (recentMeetings.length > 0) {
-      const briefingLines: string[] = [];
-      for (const m of recentMeetings) {
-        const lines = m.split('\n');
-        const dateLine = lines[0]; // [YYYY-MM-DD HH:MM]
-        // Get first meaningful content line (skip headers, empty lines, participant lists)
-        const contentLines = lines.slice(1)
-          .filter(l => l.trim() && !l.startsWith('##') && !l.startsWith('- [Speaker') && !l.startsWith('- **Speaker') && !l.startsWith('Participantes:'));
-        const preview = contentLines.slice(0, 2).join(' ').replace(/\*\*/g, '').slice(0, 100);
-        briefingLines.push(`${chalk.white(dateLine)}`);
-        if (preview.trim()) briefingLines.push(`${chalk.gray(preview)}...`);
-      }
-      console.log(boxen(briefingLines.join('\n'), {
-        title: 'Briefing',
-        titleAlignment: 'left',
-        padding: { top: 0, bottom: 0, left: 1, right: 1 },
-        margin: { top: 0, bottom: 0, left: 2, right: 0 },
-        borderStyle: 'round',
-        borderColor: 'gray',
-        dimBorder: true,
-      }));
-    }
-  } catch {}
+  // Semantic context: loaded after first transcription (see loadSemanticContext below)
 
   ui.appendLine('');
   ui.appendLine(chalk.gray('  Iniciando captura WASAPI...'));
@@ -775,13 +819,7 @@ export async function cmdStart(opts: { template?: string } = {}): Promise<void> 
   // Context system: auto-loaded + user-added via /ctx
   const extraContext: string[] = [];
 
-  // Auto-load recent meeting summaries as context
-  try {
-    const recentMeetings = loadMeetingSummaries(config, 5);
-    if (recentMeetings.length > 0) {
-      extraContext.push('# Reunioes recentes\n' + recentMeetings.join('\n---\n'));
-    }
-  } catch {}
+  // Semantic context: injected after first transcription (not upfront)
 
   function buildSystemMsg(): string {
     const currentTranscript = transcriptLines.join('\n');
