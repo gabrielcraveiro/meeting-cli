@@ -12,6 +12,7 @@ import { organizeTranscript, chatWithMeetings } from '../services/organizer';
 import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
 import { getSidecarCapturePath } from './setup';
 import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/templates';
+import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
 
 const DEEPGRAM_PER_MIN = 0.0077;  // nova-3 + diarization, single-pass
 const SEGMENT_SECONDS = 45;
@@ -144,6 +145,9 @@ class TerminalUI {
   private _drawHeader() {
     if (!this.active) return;
 
+    // Save cursor so readline's input position is preserved after this redraw
+    process.stdout.write('\x1b7');
+
     // Temporarily leave scroll region to write header
     process.stdout.write(`${ESC}r`);  // reset scroll region
 
@@ -170,13 +174,16 @@ class TerminalUI {
     process.stdout.write(`${ESC}3;1H${ESC}2K`);
     process.stdout.write(chalk.gray('─'.repeat(Math.min(this.cols, 80))));
 
-    // Restore scroll region and move cursor back into it
+    // Restore scroll region then restore cursor to where readline left it
     this._setScrollRegion();
-    this._moveCursorToScroll();
+    process.stdout.write('\x1b8');
   }
 
   private _drawFooter(hint?: string) {
     if (!this.active) return;
+
+    // Save cursor so readline's input position is preserved after this redraw
+    process.stdout.write('\x1b7');
 
     // Temporarily leave scroll region to write footer
     process.stdout.write(`${ESC}r`);  // reset scroll region
@@ -187,9 +194,9 @@ class TerminalUI {
     const prompt = hint || chalk.bold.green('Você: ');
     process.stdout.write(`${commands}${' '.repeat(Math.max(2, this.cols - 40))}${prompt}`);
 
-    // Restore scroll region and move cursor back into it
+    // Restore scroll region then restore cursor to where readline left it
     this._setScrollRegion();
-    this._moveCursorToScroll();
+    process.stdout.write('\x1b8');
   }
 
   private _moveCursorToScroll() {
@@ -206,7 +213,7 @@ class TerminalUI {
 
   updateCost(cost: number) {
     this.currentCost = cost;
-    this._drawHeader();
+    // No redraw here — caller should call drawStatusBar() to batch both updates
   }
 
   drawInputBar(hint?: string) {
@@ -218,9 +225,11 @@ class TerminalUI {
       console.log(text);
       return;
     }
-    // Write to scroll region — terminal handles scrolling automatically
+    // Save cursor, write to scroll region, restore cursor (preserves readline input position)
+    process.stdout.write('\x1b7');
     this._moveCursorToScroll();
     process.stdout.write(`${text}\n`);
+    process.stdout.write('\x1b8');
   }
 
   showStatus(time: string, segments: number) {
@@ -256,7 +265,61 @@ Regras:
 export async function cmdStart(topicArg?: string, opts: { template?: string } = {}): Promise<void> {
   const config = requireConfig();
 
-  const topic = typeof topicArg === 'string' ? topicArg.trim() : '';
+  let topic = typeof topicArg === 'string' ? topicArg.trim() : '';
+  let calendarAttendees: string[] = [];
+
+  // Calendar picker: show upcoming meetings if ICS is configured and no topic given
+  if (config.icsUrl && !topic) {
+    let meetings: Awaited<ReturnType<typeof getUpcomingMeetings>> = [];
+    try {
+      meetings = await getUpcomingMeetings(config.icsUrl);
+    } catch {
+      // Calendar is optional — silently skip on error
+    }
+
+    if (meetings.length > 0) {
+      console.log('\n📅 Reuniões próximas:\n');
+      meetings.forEach((m, i) => {
+        const time = `${formatEventTime(m.start)}–${formatEventTime(m.end)}`;
+        const attendeePreview = m.attendees.slice(0, 3).join(', ') +
+          (m.attendees.length > 3 ? ` +${m.attendees.length - 3}` : '');
+        console.log(`  ${i + 1}. ${m.title} (${time})${attendeePreview ? '  · ' + attendeePreview : ''}`);
+      });
+      console.log('\n  0. Nenhuma (digitar título manualmente)');
+      console.log('  Enter. Iniciar sem título\n');
+
+      const pickerRl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((resolve) => {
+        pickerRl.question('  Qual reunião? ', (a: string) => {
+          pickerRl.close();
+          resolve(a.trim());
+        });
+      });
+
+      if (answer === '' || answer === '0') {
+        if (answer === '0') {
+          // Ask for manual title
+          const titleRl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          const manualTitle = await new Promise<string>((resolve) => {
+            titleRl.question('  Título: ', (a: string) => {
+              titleRl.close();
+              resolve(a.trim());
+            });
+          });
+          topic = manualTitle;
+        }
+        // else Enter = no title, continue as usual
+      } else {
+        const idx = parseInt(answer) - 1;
+        if (!isNaN(idx) && idx >= 0 && idx < meetings.length) {
+          const selected = meetings[idx];
+          topic = selected.title;
+          calendarAttendees = selected.attendees;
+        }
+      }
+      console.log('');
+    }
+  }
 
   const templateName = opts.template || 'default';
   const template = getTemplate(templateName);
@@ -315,6 +378,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 
   // Context system: auto-loaded + user-added via /ctx + topic-based
   const extraContext: string[] = [];
+
+  // Inject calendar attendees as context so AI knows the participants upfront
+  if (calendarAttendees.length > 0) {
+    extraContext.push(`# Participantes esperados (calendário)\n${calendarAttendees.join(', ')}`);
+  }
 
   function showTimestamp() {
     ui.showStatus(formatTime(elapsedSec), processedSegments.size);
@@ -1022,11 +1090,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   timerInterval = setInterval(() => {
     elapsedSec = Math.floor((Date.now() - startTime) / 1000);
 
-    // Update header with current time and live cost estimate
+    // Update header with current time and live cost estimate (single redraw)
     const segMin = (transcribedSegments * SEGMENT_SECONDS) / 60;
     const liveCost = segMin * DEEPGRAM_PER_MIN;
-    ui.drawStatusBar(formatTime(elapsedSec), processedSegments.size);
-    ui.updateCost(liveCost);
+    ui.updateCost(liveCost);  // store cost first, no redraw
+    ui.drawStatusBar(formatTime(elapsedSec), processedSegments.size);  // single redraw
 
     if (!warned30 && elapsedSec >= WARN_SECONDS) {
       warned30 = true;

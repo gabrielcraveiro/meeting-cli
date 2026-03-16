@@ -19,6 +19,8 @@ export interface Config {
   organizationPrompt: string;
   // Speaker name mapping: { "0": "Gabriel", "1": "Ana" }
   speakerNames?: Record<string, string>;
+  // Calendar integration
+  icsUrl?: string;
   // Legacy
   ffmpegPath?: string;
   audioBackend?: string;
@@ -166,6 +168,13 @@ export async function runConfigWizard(): Promise<void> {
   const chatApiKey = await ask(rl, 'API Key (Bearer token)', existing?.chatApiKey || '');
   const chatModel = await ask(rl, 'Modelo', existing?.chatModel || 'gpt-4o-mini');
 
+  // Calendar — Outlook ICS
+  console.log('\n📅 Calendário — Outlook ICS (opcional)\n');
+  console.log('  Permite ver suas reuniões do Teams/Outlook ao iniciar uma gravação.');
+  console.log('  Para obter a URL: Outlook Web → Configurações → Publicar calendário → copiar URL .ics');
+  console.log('  Deixe em branco para pular.\n');
+  const icsUrl = await ask(rl, 'URL do calendário .ics', existing?.icsUrl || '');
+
   rl.close();
 
   const config: Config = {
@@ -178,6 +187,7 @@ export async function runConfigWizard(): Promise<void> {
     chatApiKey,
     chatModel,
     organizationPrompt: existing?.organizationPrompt || DEFAULT_PROMPT,
+    ...(icsUrl ? { icsUrl } : {}),
   };
 
   saveConfig(config);
