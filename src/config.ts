@@ -21,6 +21,8 @@ export interface Config {
   speakerNames?: Record<string, string>;
   // Calendar integration
   icsUrl?: string;
+  // Privacy & compliance
+  deleteAudioAfterTranscription?: boolean;  // default true — deletes WAV after note is created
   // Legacy
   ffmpegPath?: string;
   audioBackend?: string;
@@ -180,6 +182,12 @@ export async function runConfigWizard(): Promise<void> {
   console.log('  Deixe em branco para pular.\n');
   const icsUrl = await ask(rl, 'URL do calendário .ics', existing?.icsUrl || '');
 
+  // Privacy
+  console.log('\n🔒 Privacidade & Compliance\n');
+  const currentDelete = existing?.deleteAudioAfterTranscription !== false ? 'sim' : 'nao';
+  const deleteAnswer = await ask(rl, 'Deletar áudio após transcrição? (sim/nao)', currentDelete);
+  const deleteAudioAfterTranscription = deleteAnswer.toLowerCase() !== 'nao';
+
   rl.close();
 
   const config: Config = {
@@ -193,6 +201,7 @@ export async function runConfigWizard(): Promise<void> {
     chatModel,
     organizationPrompt: existing?.organizationPrompt || DEFAULT_PROMPT,
     ...(icsUrl ? { icsUrl } : {}),
+    deleteAudioAfterTranscription,
   };
 
   saveConfig(config);

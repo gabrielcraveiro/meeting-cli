@@ -874,10 +874,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     const noteTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
     s = createSpinner('Salvando nota...').start();
+    const keepAudio = config.deleteAudioAfterTranscription === false;
     const notePath = await createMeetingNote(config, {
       transcript: fullTranscript,
       summary,
-      audioPath: `Recordings/${finalAudioName}`,
+      audioPath: keepAudio ? `Recordings/${finalAudioName}` : undefined,
       durationSec,
       whisperCost: deepgramCost,
       chatCost,
@@ -909,6 +910,14 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
         borderColor: 'green',
       }
     ));
+
+    // Delete audio after transcription (compliance/storage)
+    if (config.deleteAudioAfterTranscription !== false && fs.existsSync(finalAudioPath)) {
+      try {
+        fs.unlinkSync(finalAudioPath);
+        console.log(chalk.gray(`  Audio deletado (compliance). Desative com: meeting config`));
+      } catch {}
+    }
   }
 
   function cleanup(dir: string) {

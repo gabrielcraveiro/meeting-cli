@@ -94,7 +94,7 @@ export async function createMeetingNote(
   params: {
     transcript: string;
     summary: string;
-    audioPath: string;
+    audioPath?: string;
     durationSec: number;
     whisperCost: number;
     chatCost: number;
@@ -142,7 +142,7 @@ estimated_cost_usd: ${totalCost}
 ---
 # ${title}
 
-![[${params.audioPath}]]
+${params.audioPath ? `![[${params.audioPath}]]` : ''}
 
 ## AI Summary
 ${params.summary}
