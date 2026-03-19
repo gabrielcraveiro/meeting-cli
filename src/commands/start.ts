@@ -13,6 +13,7 @@ import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
 import { getSidecarCapturePath } from './setup';
 import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/templates';
 import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
+import { matchSpeaker, enrollSpeaker } from '../services/voice';
 
 const DEEPGRAM_PER_MIN = 0.0077;  // nova-3 + diarization, single-pass
 const SEGMENT_SECONDS = 45;
@@ -641,7 +642,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       return;
     }
 
-    // Speaker naming wizard: detect unknown speakers ([Speaker N] and [Remoto N])
+    // Speaker identification: voice fingerprint auto-match + manual wizard for unknowns
     const unknownLabels: Array<{ label: string; configKey: string }> = [];
     const speakerPatterns = fullTranscript.matchAll(/\[(Speaker \d+|Remoto \d+)\]/g);
     const seenLabels = new Set<string>();
@@ -649,7 +650,6 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       const label = m[1];
       if (seenLabels.has(label)) continue;
       seenLabels.add(label);
-      // Config key: "Speaker N" for both [Speaker N] and [Remoto N]
       const configKey = label.startsWith('Remoto')
         ? `Speaker ${label.replace('Remoto ', '')}`
         : label;
@@ -658,15 +658,59 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       }
     }
 
-    // Recreate readline for post-meeting wizard
+    // Phase 1: Try voice fingerprint auto-match for unknown speakers
+    const voiceMatched: Map<string, string> = new Map();  // label → name
+    if (unknownLabels.length > 0 && fs.existsSync(finalAudioPath)) {
+      try {
+        console.log(chalk.gray('\n  Identificando speakers por voz...'));
+        // Use calendar attendees as candidates to narrow search
+        const candidates = calendarAttendees.length > 0 ? calendarAttendees : undefined;
+
+        for (const { label } of unknownLabels) {
+          // Find timestamp range for this speaker from transcript
+          const tag = `[${label}]`;
+          const speakerLines = fullTranscript.split('\n').filter(l => l.includes(tag));
+          if (speakerLines.length === 0) continue;
+
+          // Extract timestamp from first line: [MM:SS] [Speaker N] text
+          const tsMatch = speakerLines[0].match(/\[(\d+):(\d+)\]/);
+          const startSec = tsMatch ? parseInt(tsMatch[1]) * 60 + parseInt(tsMatch[2]) : 0;
+          // Use ~15 seconds of audio from this speaker's first appearance
+          const endSec = startSec + 15;
+
+          const matches = await matchSpeaker(finalAudioPath, candidates, startSec, endSec);
+          if (matches.length > 0 && matches[0].similarity >= 0.4) {
+            const bestMatch = matches[0];
+            voiceMatched.set(label, bestMatch.name);
+            console.log(chalk.hex('#98c379')(`    ${label} → ${bestMatch.name} (${(bestMatch.similarity * 100).toFixed(0)}%)`));
+          }
+        }
+      } catch {
+        // Voice matching is optional — degrade gracefully
+      }
+    }
+
+    // Apply voice matches
+    for (const [label, name] of voiceMatched) {
+      if (!config.speakerNames) config.speakerNames = {};
+      const configKey = label.startsWith('Remoto')
+        ? `Speaker ${label.replace('Remoto ', '')}`
+        : label;
+      config.speakerNames[configKey] = name;
+      fullTranscript = fullTranscript.replace(new RegExp(`\\[${label}\\]`, 'g'), `[${name}]`);
+    }
+
+    // Phase 2: Manual wizard for remaining unknown speakers
+    const stillUnknown = unknownLabels.filter(u => !voiceMatched.has(u.label));
+
     let wizardRl: readline.Interface | null = null;
     try {
       wizardRl = readline.createInterface({ input: process.stdin, output: process.stdout });
     } catch {}
 
-    if (wizardRl && unknownLabels.length > 0) {
-      console.log(chalk.bold('\n  Identificacao de speakers:\n'));
-      for (const { label } of unknownLabels) {
+    if (wizardRl && stillUnknown.length > 0) {
+      console.log(chalk.bold('\n  Speakers nao identificados:\n'));
+      for (const { label } of stillUnknown) {
         const tag = `[${label}]`;
         const lines = fullTranscript.split('\n').filter(l => l.includes(tag));
         const sample = lines.slice(0, 2).map(l => l.replace(tag, '').trim().slice(0, 80)).join(' | ');
@@ -674,7 +718,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       }
       console.log(chalk.gray('  (Enter para pular, nome para salvar no config)\n'));
 
-      for (const { label, configKey } of unknownLabels) {
+      for (const { label, configKey } of stillUnknown) {
         const name = await new Promise<string>((resolve) => {
           wizardRl!.question(chalk.cyan(`  ${label} = `), (answer: string) => {
             resolve(answer.trim());
@@ -684,6 +728,20 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
           if (!config.speakerNames) config.speakerNames = {};
           config.speakerNames[configKey] = name;
           fullTranscript = fullTranscript.replace(new RegExp(`\\[${label}\\]`, 'g'), `[${name}]`);
+
+          // Auto-enroll new speaker for future meetings
+          if (fs.existsSync(finalAudioPath)) {
+            try {
+              const tsMatch = fullTranscript.split('\n')
+                .find(l => l.includes(`[${name}]`))
+                ?.match(/\[(\d+):(\d+)\]/);
+              const startSec = tsMatch ? parseInt(tsMatch[1]) * 60 + parseInt(tsMatch[2]) : 0;
+              const enrolled = await enrollSpeaker(finalAudioPath, name, startSec, startSec + 15);
+              if (enrolled) {
+                console.log(chalk.gray(`    Voice profile salvo para ${name}`));
+              }
+            } catch {}
+          }
         }
       }
 
