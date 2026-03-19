@@ -17,6 +17,7 @@ Usage:
 import sys
 import json
 import os
+import io
 import numpy as np
 from pathlib import Path
 
@@ -26,8 +27,16 @@ _encoder = None
 def get_encoder():
     global _encoder
     if _encoder is None:
-        from resemblyzer import VoiceEncoder
-        _encoder = VoiceEncoder("cpu")
+        # Suppress Resemblyzer's "Loaded the voice encoder model" message
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            import warnings
+            warnings.filterwarnings("ignore")
+            from resemblyzer import VoiceEncoder
+            _encoder = VoiceEncoder("cpu")
+        finally:
+            sys.stdout = old_stdout
     return _encoder
 
 

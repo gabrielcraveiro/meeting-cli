@@ -32,17 +32,23 @@ function findScript(): string {
 function runPython(args: string[], timeout = 30000): Promise<VoiceResult> {
   return new Promise((resolve) => {
     const script = findScript();
-    // Try python3 first, then python
-    const tryRun = (cmd: string) => {
-      execFile(cmd, [script, ...args], { timeout, encoding: 'utf-8' }, (err, stdout) => {
+    // Try multiple approaches: uv run (modern), python3, python
+    const approaches = [
+      { cmd: 'uv', args: ['run', '--with', 'resemblyzer', 'python3', script, ...args] },
+      { cmd: 'python3', args: [script, ...args] },
+      { cmd: 'python', args: [script, ...args] },
+    ];
+
+    let attemptIdx = 0;
+    const tryNext = () => {
+      if (attemptIdx >= approaches.length) {
+        resolve({ error: 'Voice sidecar failed: python/uv not found or resemblyzer not installed' });
+        return;
+      }
+      const { cmd, args: cmdArgs } = approaches[attemptIdx++];
+      execFile(cmd, cmdArgs, { timeout, encoding: 'utf-8' }, (err, stdout) => {
         if (err) {
-          if (cmd === 'python3') {
-            // Fallback to python
-            tryRun('python');
-            return;
-          }
-          // Both failed — graceful degradation
-          resolve({ error: `Voice sidecar failed: ${err.message}` });
+          tryNext();
           return;
         }
         try {
@@ -52,7 +58,7 @@ function runPython(args: string[], timeout = 30000): Promise<VoiceResult> {
         }
       });
     };
-    tryRun('python3');
+    tryNext();
   });
 }
 

@@ -213,11 +213,8 @@ export async function transcribeFile(filePath: string, config: Config, options?:
     }
   }
 
-  // Boost speaker name recognition: pass known names as keywords
-  const speakerNames = Object.values(config.speakerNames || {}).filter(n => n.length > 1);
-  if (speakerNames.length > 0) {
-    params.set('keywords', speakerNames.slice(0, 10).join(':1,') + ':1');
-  }
+  // Boost speaker name recognition: keywords only supported on nova-2 english models
+  // Removed: keywords param causes 400 errors on nova-3 and pt language models
 
   const data = await callDeepgram(audioBuffer, contentType, params, config);
   return diarize ? formatDiarizedTranscription(data, config, isStereo) : formatPlain(data);
