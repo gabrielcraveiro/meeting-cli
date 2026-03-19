@@ -95,8 +95,9 @@ const ESC = '\x1b[';
 class TerminalUI {
   private rows = process.stdout.rows || 24;
   private cols = process.stdout.columns || 80;
-  private headerLines = 3;  // header occupies top 3 lines
-  private footerLines = 1;  // input bar at bottom
+  private headerLines = 3;    // header occupies top 3 lines
+  private transcriptLines = 3; // compact transcript zone (last N lines)
+  private footerLines = 2;    // input bar at bottom (prompt + input)
   private active = false;
   private currentTime = '00:00';
   private currentSegments = 0;
@@ -104,30 +105,38 @@ class TerminalUI {
   private currentExtra = '';
   private templateLabel = '';
   private topicLabel = '';
+  private transcriptBuffer: string[] = [];  // rolling buffer of last transcript lines
+  private inputLine = '';  // current user input text
+  private isPaused = false;  // pause state for header display
 
   init() {
     this.rows = process.stdout.rows || 24;
     this.cols = process.stdout.columns || 80;
     this.active = true;
 
-    // Clear screen and draw initial layout
+    // Enter alternate screen buffer (like vim/Claude Code — no scroll history leaks)
+    process.stdout.write(`${ESC}?1049h`);
+    // Hide cursor during initial draw
+    process.stdout.write(`${ESC}?25l`);
     process.stdout.write(`${ESC}2J${ESC}H`);
 
     this._drawHeader();
+    this._drawTranscriptZone();
     this._setScrollRegion();
     this._drawFooter();
 
-    // Move cursor to scroll region
-    this._moveCursorToScroll();
+    // Move cursor to input line
+    this._moveCursorToInput();
 
     // Handle terminal resize
     process.stdout.on('resize', () => {
       this.rows = process.stdout.rows || 24;
       this.cols = process.stdout.columns || 80;
-      this._setScrollRegion();
       this._drawHeader();
+      this._drawTranscriptZone();
+      this._setScrollRegion();
       this._drawFooter();
-      this._moveCursorToScroll();
+      this._moveCursorToInput();
     });
   }
 
@@ -136,72 +145,102 @@ class TerminalUI {
     this.topicLabel = topic;
   }
 
+  setPaused(paused: boolean) {
+    this.isPaused = paused;
+    this._drawHeader();
+  }
+
+  // Scroll region: between transcript zone and footer
+  private _scrollTop() { return this.headerLines + this.transcriptLines + 2; } // +1 separator +1 for 1-based
+  private _scrollBottom() { return this.rows - this.footerLines; }
+
   private _setScrollRegion() {
-    const scrollTop = this.headerLines + 1;
-    const scrollBottom = this.rows - this.footerLines;
-    process.stdout.write(`${ESC}${scrollTop};${scrollBottom}r`);
+    process.stdout.write(`${ESC}${this._scrollTop()};${this._scrollBottom()}r`);
   }
 
   private _drawHeader() {
     if (!this.active) return;
 
-    // Save cursor so readline's input position is preserved after this redraw
-    process.stdout.write('\x1b7');
+    process.stdout.write(`${ESC}r`);  // reset scroll region to write header
 
-    // Temporarily leave scroll region to write header
-    process.stdout.write(`${ESC}r`);  // reset scroll region
+    const recording = this.isPaused
+      ? chalk.hex('#e5c07b').bold(' ⏸ PAUSED')
+      : chalk.hex('#e06c75').bold(' ● REC');
+    const time = chalk.hex('#ffffff').bold(this.currentTime);
+    const segs = chalk.hex('#5c6370')(`${this.currentSegments} seg`);
+    const cost = chalk.hex('#5c6370')(`$${this.currentCost.toFixed(4)}`);
+    const extra = this.currentExtra ? chalk.hex('#e5c07b')(` ${this.currentExtra}`) : '';
+    const sep = chalk.hex('#5c6370')('│');
 
-    const recording = chalk.red.bold(' ● REC');
-    const time = chalk.white.bold(this.currentTime);
-    const segs = chalk.gray(`${this.currentSegments} seg`);
-    const cost = chalk.gray(`$${this.currentCost.toFixed(4)}`);
-    const extra = this.currentExtra ? chalk.yellow(` ${this.currentExtra}`) : '';
-
-    // Line 1: main status bar
     process.stdout.write(`${ESC}1;1H${ESC}2K`);
-    const line1 = `${recording}  ${time}  │  ${segs}  │  ${cost}${extra}`;
-    process.stdout.write(line1);
+    process.stdout.write(`${recording}  ${time}  ${sep}  ${segs}  ${sep}  ${cost}${extra}`);
 
-    // Line 2: labels (template, topic, mics)
     process.stdout.write(`${ESC}2;1H${ESC}2K`);
     const parts: string[] = [];
-    if (this.templateLabel) parts.push(chalk.magenta(this.templateLabel));
-    if (this.topicLabel) parts.push(chalk.cyan(`⟨${this.topicLabel}⟩`));
-    parts.push(chalk.green('Mic: ✔') + '  ' + chalk.green('System: ✔'));
-    process.stdout.write(`  ${parts.join('  │  ')}`);
+    if (this.templateLabel) parts.push(chalk.hex('#c678dd')(this.templateLabel));
+    if (this.topicLabel) parts.push(chalk.hex('#56b6c2')(`⟨${this.topicLabel}⟩`));
+    parts.push(chalk.hex('#98c379')('Mic ✔') + '  ' + chalk.hex('#98c379')('Sys ✔'));
+    process.stdout.write(`  ${parts.join(`  ${sep}  `)}`);
 
-    // Line 3: separator
     process.stdout.write(`${ESC}3;1H${ESC}2K`);
-    process.stdout.write(chalk.gray('─'.repeat(Math.min(this.cols, 80))));
+    process.stdout.write(chalk.hex('#3e4451')('─'.repeat(Math.min(this.cols, 80))));
 
-    // Restore scroll region then restore cursor to where readline left it
     this._setScrollRegion();
-    process.stdout.write('\x1b8');
+    this._moveCursorToInput();
+  }
+
+  private _drawTranscriptZone() {
+    if (!this.active) return;
+
+    process.stdout.write(`${ESC}r`);
+
+    const startRow = this.headerLines + 1;
+    const visible = this.transcriptBuffer.slice(-this.transcriptLines);
+
+    for (let i = 0; i < this.transcriptLines; i++) {
+      const row = startRow + i;
+      process.stdout.write(`${ESC}${row};1H${ESC}2K`);
+      if (i < visible.length) {
+        const line = visible[i].slice(0, this.cols - 2);
+        process.stdout.write(chalk.hex('#abb2bf')(`  ${line}`));
+      }
+    }
+
+    const sepRow = startRow + this.transcriptLines;
+    process.stdout.write(`${ESC}${sepRow};1H${ESC}2K`);
+    process.stdout.write(chalk.hex('#3e4451')('─'.repeat(Math.min(this.cols, 80))));
+
+    this._setScrollRegion();
+    this._moveCursorToInput();
   }
 
   private _drawFooter(hint?: string) {
     if (!this.active) return;
 
-    // Save cursor so readline's input position is preserved after this redraw
-    process.stdout.write('\x1b7');
+    process.stdout.write(`${ESC}r`);
 
-    // Temporarily leave scroll region to write footer
-    process.stdout.write(`${ESC}r`);  // reset scroll region
+    // Separator line above input
+    const sepRow = this.rows - 1;
+    process.stdout.write(`${ESC}${sepRow};1H${ESC}2K`);
+    process.stdout.write(chalk.hex('#3e4451')('─'.repeat(Math.min(this.cols, 80))));
 
-    const footerRow = this.rows;
-    process.stdout.write(`${ESC}${footerRow};1H${ESC}2K`);
-    const commands = chalk.gray('/stop  /help  /ctx');
-    const prompt = hint || chalk.bold.green('Você: ');
-    process.stdout.write(`${commands}${' '.repeat(Math.max(2, this.cols - 40))}${prompt}`);
+    // Input line
+    const inputRow = this.rows;
+    process.stdout.write(`${ESC}${inputRow};1H${ESC}2K`);
+    const commands = chalk.hex('#5c6370')('/stop /pause /ctx');
+    const prompt = hint || chalk.hex('#61afef').bold(' › ') + chalk.hex('#abb2bf')(this.inputLine);
+    process.stdout.write(`  ${commands}  ${prompt}`);
 
-    // Restore scroll region then restore cursor to where readline left it
     this._setScrollRegion();
-    process.stdout.write('\x1b8');
+    this._moveCursorToInput();
   }
 
-  private _moveCursorToScroll() {
-    const scrollBottom = this.rows - this.footerLines;
-    process.stdout.write(`${ESC}${scrollBottom};1H`);
+  private _moveCursorToInput() {
+    if (!this.active) return;
+    // Prefix: "  /stop /pause /ctx   › " = 2+17+2+3 = 24 visible chars
+    const inputRow = this.rows;
+    const col = 24 + this.inputLine.length + 1; // +1 for 1-based column
+    process.stdout.write(`${ESC}${inputRow};${col}H`);
   }
 
   drawStatusBar(time: string, segments: number, extra?: string) {
@@ -213,23 +252,33 @@ class TerminalUI {
 
   updateCost(cost: number) {
     this.currentCost = cost;
-    // No redraw here — caller should call drawStatusBar() to batch both updates
   }
 
   drawInputBar(hint?: string) {
     this._drawFooter(hint);
   }
 
+  setInput(text: string) {
+    this.inputLine = text;
+    this._drawFooter();
+  }
+
+  // Update transcript zone (fixed area, shows last N lines)
+  updateTranscript(line: string) {
+    this.transcriptBuffer.push(line);
+    this._drawTranscriptZone();
+  }
+
+  // Append to chat/insights scroll region (main scrollable area)
   appendLine(text: string) {
     if (!this.active) {
       console.log(text);
       return;
     }
-    // Save cursor, write to scroll region, restore cursor (preserves readline input position)
-    process.stdout.write('\x1b7');
-    this._moveCursorToScroll();
+    const scrollBottom = this._scrollBottom();
+    process.stdout.write(`${ESC}${scrollBottom};1H`);
     process.stdout.write(`${text}\n`);
-    process.stdout.write('\x1b8');
+    this._moveCursorToInput();
   }
 
   showStatus(time: string, segments: number) {
@@ -241,26 +290,34 @@ class TerminalUI {
   teardown() {
     if (!this.active) return;
     this.active = false;
-    // Reset scroll region to full terminal
+    // Reset scroll region
     process.stdout.write(`${ESC}r`);
-    // Move to bottom
-    process.stdout.write(`${ESC}${this.rows};1H\n`);
+    // Show cursor
+    process.stdout.write(`${ESC}?25h`);
+    // Leave alternate screen buffer (restores previous terminal content)
+    process.stdout.write(`${ESC}?1049l`);
   }
 }
 
-const INSIGHT_PROMPT = `Voce esta acompanhando uma reuniao em tempo real. Analise a transcricao e extraia APENAS os pontos mais importantes.
+const INSIGHT_PROMPT = `<role>Analista de reunioes em tempo real. Voce recebe transcrições incrementais e extrai sinais de decisao.</role>
 
-Formato (exatamente):
-- [decisao] texto curto
-- [acao] texto curto com responsavel se mencionado
-- [ponto] insight ou tema relevante
-- [risco] preocupacao ou blocker mencionado
+<task>Extraia APENAS pontos acionaveis. Priorize: decisoes > acoes > riscos > pontos informativos.</task>
 
-Regras:
-- Maximo 5 bullets
-- Sem introducao ou conclusao
-- Se nada relevante: (sem pontos relevantes ainda)
-- Portugues`;
+<format>
+- [decisao] O que foi decidido (quem, o que, quando — se mencionado)
+- [acao] Tarefa atribuida a alguem com prazo se mencionado
+- [risco] Blocker, dependencia externa, ou preocupacao levantada
+- [ponto] Insight tecnico ou de negocio que altera entendimento
+
+Tags obrigatorias. Maximo 5 bullets. Sem preambulo. Portugues BR.
+Se nenhum ponto relevante: responda exatamente "(sem pontos relevantes ainda)"
+</format>
+
+<guidelines>
+- Nao repita pontos de analises anteriores — foque no que e NOVO neste trecho
+- Infira nomes reais se mencionados no dialogo. Use [Speaker N] apenas se o nome nao for identificavel
+- "Vamos fazer X" = decisao. "Eu vou fazer X" = acao. "E se X acontecer?" = risco
+</guidelines>`;
 
 export async function cmdStart(topicArg?: string, opts: { template?: string } = {}): Promise<void> {
   const config = requireConfig();
@@ -362,6 +419,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   let timerInterval: NodeJS.Timeout | null = null;
   let stopping = false;
   let warned30 = false;
+  let warned60 = false;
   let insightInterval: NodeJS.Timeout | null = null;
   let lastInsightLineCount = 0;
   let insightBusy = false;
@@ -373,15 +431,27 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   let transcribedSegments = 0;
   const remoteSpeakerIds = new Set<string>();   // track unique remote speakers across segments
 
+  // Pause state
+  let paused = false;
+  let pausedAtSec = 0;     // elapsed seconds when paused (for display)
+  let totalPausedSec = 0;   // total seconds spent paused (excluded from timer)
+  let pauseStartTime = 0;   // Date.now() when pause started
+  const pausedSegments = new Set<string>();  // segments captured during pause (skip transcription)
+
   const ui = new TerminalUI();
   const chatHistory: Array<{ role: string; content: string }> = [];
 
   // Context system: auto-loaded + user-added via /ctx + topic-based
   const extraContext: string[] = [];
 
-  // Inject calendar attendees as context so AI knows the participants upfront
+  // Inject calendar attendees as context (not ordered — AI should NOT assume speaker identity from list order)
   if (calendarAttendees.length > 0) {
-    extraContext.push(`# Participantes esperados (calendário)\n${calendarAttendees.join(', ')}`);
+    extraContext.push(
+      `# Participantes convidados (calendário)\n`
+      + `Os seguintes participantes foram convidados para esta reunião: ${calendarAttendees.join(', ')}.\n`
+      + `IMPORTANTE: Esta lista NÃO indica quem são Speaker 0, Speaker 1, etc. `
+      + `Use o conteúdo da fala para inferir identidades, não a ordem desta lista.`
+    );
   }
 
   function showTimestamp() {
@@ -393,7 +463,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       const stat = fs.statSync(segPath);
       if (stat.size < 4096) return;
 
-      ui.appendLine(chalk.gray(`  transcrevendo ${path.basename(segPath)}...`));
+      ui.updateTranscript(chalk.gray(`transcrevendo ${path.basename(segPath)}...`));
       // Single-pass: nova-3 + diarization on each segment (no re-transcription needed)
       const text = await transcribeFile(segPath, config, { diarize: true, model: 'nova-3' });
       if (!text) return;
@@ -417,9 +487,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
         loadSemanticContext();
       }
 
+      // Show transcript in the fixed transcript zone (not the scroll region)
       for (const speakerLine of text.split('\n')) {
         if (speakerLine.trim()) {
-          ui.appendLine(chalk.cyan(`  ${formatTimestamp(offsetSec)} `) + speakerLine.trim());
+          ui.updateTranscript(`${formatTimestamp(offsetSec)} ${speakerLine.trim()}`);
         }
       }
     } catch (err) {
@@ -438,11 +509,16 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
           processedSegments.add(seg);
           const segIndex = parseInt(seg.replace('seg_', '').replace('.wav', ''));
 
+          // Skip segments captured during pause
+          if (pausedSegments.has(seg)) {
+            continue;
+          }
+
           // Strategy: skip silent segments before transcribing (cost savings)
           const rmsDb = segmentRmsDb.get(segIndex);
           if (rmsDb !== undefined && rmsDb < SILENCE_THRESHOLD_DB) {
             skippedSilentSegments++;
-            ui.appendLine(chalk.gray(`  seg_${segIndex} silencioso (${rmsDb.toFixed(0)} dB) — pulado`));
+            ui.updateTranscript(chalk.gray(`seg_${segIndex} silencioso (${rmsDb.toFixed(0)} dB) — pulado`));
             continue;
           }
 
@@ -454,7 +530,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   }
 
   async function runAutoInsight() {
-    if (insightBusy || chatBusy || stopping) return;
+    if (insightBusy || chatBusy || stopping || paused) return;
     if (transcriptLines.length <= lastInsightLineCount) return;
     if (transcriptLines.length < 3) return;
 
@@ -1030,6 +1106,12 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
           const rmsDb = parseFloat(evt.rmsDb);
           segmentRmsDb.set(evt.index, rmsDb);
 
+          // Mark segments during pause for skipping
+          if (paused) {
+            const segFile = `seg_${String(evt.index).padStart(3, '0')}.wav`;
+            pausedSegments.add(segFile);
+          }
+
           // Early warning: no audio signal at all (dead capture)
           if (evt.index <= 2 && rmsDb <= -99) {
             ui.appendLine(chalk.red.bold('  AVISO: Audio sem sinal! Verifique:'));
@@ -1038,7 +1120,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
             ui.appendLine(chalk.red('    - Se ha audio tocando no sistema'));
           }
 
-          if (rmsDb < SILENCE_THRESHOLD_DB) {
+          if (rmsDb < SILENCE_THRESHOLD_DB && !paused) {
             consecutiveSilentSegments++;
             if (consecutiveSilentSegments >= SILENCE_TIMEOUT_SEGMENTS && !stopping) {
               const silenceMin = Math.round(consecutiveSilentSegments * SEGMENT_SECONDS / 60);
@@ -1088,7 +1170,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 
   // Timer — header update + safety limits
   timerInterval = setInterval(() => {
-    elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+    // Subtract paused time from elapsed
+    const rawElapsed = Math.floor((Date.now() - startTime) / 1000);
+    const currentPause = paused ? Math.floor((Date.now() - pauseStartTime) / 1000) : 0;
+    elapsedSec = rawElapsed - totalPausedSec - currentPause;
 
     // Update header with current time and live cost estimate (single redraw)
     const segMin = (transcribedSegments * SEGMENT_SECONDS) / 60;
@@ -1098,17 +1183,23 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 
     if (!warned30 && elapsedSec >= WARN_SECONDS) {
       warned30 = true;
-      ui.appendLine(chalk.yellow('  30 minutos de gravacao. Auto-stop em 30 min.'));
+      ui.appendLine(chalk.yellow('  30 minutos de gravacao. Limite de 60 min sera avaliado conforme atividade.'));
     }
 
     if (elapsedSec >= HARD_STOP_SECONDS && captureProcess && !stopping) {
-      ui.appendLine(chalk.red('  60 minutos — parando automaticamente'));
-      userRequestedStop = true;
-      try { captureProcess.stdin?.write('q\n'); } catch {}
-      setTimeout(() => {
-        if (captureProcess && !stopping) captureProcess.kill('SIGINT');
-      }, 2000);
-      return;
+      // Only auto-stop if sustained silence (same threshold as silence auto-stop)
+      if (consecutiveSilentSegments >= SILENCE_TIMEOUT_SEGMENTS) {
+        ui.appendLine(chalk.red('  60+ minutos e silencio sustentado — parando automaticamente'));
+        userRequestedStop = true;
+        try { captureProcess.stdin?.write('q\n'); } catch {}
+        setTimeout(() => {
+          if (captureProcess && !stopping) captureProcess.kill('SIGINT');
+        }, 2000);
+        return;
+      } else if (!warned60) {
+        warned60 = true;
+        ui.appendLine(chalk.yellow('  60 minutos atingidos, mas voz detectada. Continuando sem limite.'));
+      }
     }
 
   }, 1000);
@@ -1122,32 +1213,55 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   }, 2 * 60 * 1000);
 
   // ── Readline for chat ──
+  // Use a silent writable stream so readline doesn't echo to stdout (which corrupts the TUI).
+  // We handle display manually via ui.setInput() and ui.appendLine().
+  const nullOutput = new (require('stream').Writable)({ write(_c: any, _e: any, cb: any) { cb(); } });
   let rl: readline.Interface | null = readline.createInterface({
     input: process.stdin,
-    output: process.stdout,
+    output: nullOutput,
     terminal: true,
     prompt: '',
+  });
+
+  // Mirror keystrokes to TUI footer
+  process.stdin.on('data', () => {
+    // Only update if readline is active (not in finalization)
+    if (!rl || stopping) return;
+    // After readline processes the input, grab its current line
+    setImmediate(() => {
+      if (rl) ui.setInput((rl as any).line || '');
+    });
   });
 
   // Semantic context: injected after first transcription (not upfront) or pre-loaded via topic
 
   function buildSystemMsg(): string {
     const currentTranscript = transcriptLines.join('\n');
-    let msg = 'Voce e um assistente em tempo real durante uma reuniao. Responda em portugues, de forma concisa e direta.\n\n';
+    let msg = `<role>Assistente de reuniao em tempo real. Voce esta integrado a uma sessao de gravacao ao vivo.</role>
+
+<behavior>
+- Responda em portugues BR, de forma concisa e direta (2-4 frases quando possivel)
+- Cruze informacoes da transcricao atual com contexto de reunioes passadas quando relevante
+- Se alguem perguntar "o que foi decidido?", consulte a transcricao E reunioes anteriores sobre o mesmo tema
+- Se a informacao nao esta disponivel, diga "nao encontrei isso na transcricao ou contexto" — nao invente
+- Use nomes reais dos participantes quando identificaveis
+</behavior>\n\n`;
 
     if (extraContext.length > 0) {
-      msg += '# Contexto adicional\n' + extraContext.join('\n\n') + '\n\n';
+      msg += '# Contexto (reunioes passadas, documentos, participantes)\n' + extraContext.join('\n\n') + '\n\n';
     }
 
     if (currentTranscript.trim()) {
-      msg += '# Transcricao da reuniao em andamento\n' + currentTranscript + '\n\n';
+      msg += '# Transcricao ao vivo (atualizada em tempo real)\n' + currentTranscript + '\n\n';
     }
 
-    msg += 'Responda baseado na transcricao e no contexto. Se a informacao nao esta disponivel, diga isso.';
     return msg;
   }
 
   rl.on('line', async (input: string) => {
+    // Clear input display after submit
+    ui.setInput('');
+
     const text = input.trim();
     if (!text) return;
 
@@ -1165,11 +1279,31 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       return;
     }
 
+    if (cmd === 'pause' || cmd === 'pausar' || cmd === 'resume' || cmd === 'retomar') {
+      if (!paused) {
+        // Pause
+        paused = true;
+        pauseStartTime = Date.now();
+        pausedAtSec = elapsedSec;
+        ui.setPaused(true);
+        ui.appendLine(chalk.hex('#e5c07b')('  ⏸ Gravação pausada. /pause para retomar.'));
+      } else {
+        // Resume
+        const pauseDuration = Math.floor((Date.now() - pauseStartTime) / 1000);
+        totalPausedSec += pauseDuration;
+        paused = false;
+        ui.setPaused(false);
+        ui.appendLine(chalk.hex('#98c379')(`  ▶ Gravação retomada. (pausa: ${formatTime(pauseDuration)})`));
+      }
+      return;
+    }
+
     if (cmd === 'help' || cmd === 'ajuda') {
       ui.appendLine('');
       ui.appendLine(chalk.bold('  Comandos durante gravação:'));
       ui.appendLine('');
       ui.appendLine(`  ${chalk.green('/stop')}              Para a gravação e finaliza`);
+      ui.appendLine(`  ${chalk.green('/pause')}             Pausa/retoma a gravação`);
       ui.appendLine(`  ${chalk.green('/ctx')} ${chalk.cyan('<arquivo>')}     Adiciona arquivo do vault como contexto`);
       ui.appendLine(`  ${chalk.green('/ctx')} ${chalk.cyan('<texto>')}       Adiciona texto livre como contexto`);
       ui.appendLine(`  ${chalk.green('/contexto')}          Mostra contextos carregados`);

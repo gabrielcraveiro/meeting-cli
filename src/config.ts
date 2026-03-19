@@ -32,20 +32,25 @@ const CONFIG_DIR = path.join(os.homedir(), '.config', 'meeting-cli');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
 const DEFAULT_PROMPT =
-  'You are an expert meeting secretary. You receive a transcript with timestamps and speaker labels ([Speaker 0], [Speaker 1]).\n\n' +
-  'Produce a structured meeting note in Portuguese (Brazil) with these sections:\n\n' +
-  '## Resumo\nA concise 2-4 sentence executive overview. Meaningful enough to understand the meeting without reading further.\n\n' +
-  '## Pontos Principais\nBulleted list of key topics discussed.\n\n' +
-  '## Decisoes Tomadas\nBulleted list with [MM:SS] timestamp references.\n\n' +
-  '## Action Items\nTable format: | Acao | Responsavel | Prazo | Prioridade |\n\n' +
-  'Rules:\n' +
-  '- TITLE: First line = short descriptive title (no # prefix, no date). Example: "Alinhamento Regulação Digital".\n' +
-  '- PARTICIPANTS: Second line = Participantes: Name1, Name2 (comma-separated).\n' +
-  '- SPEAKER INFERENCE: If names are mentioned in conversation, use real names INSTEAD of Speaker labels.\n' +
-  '- TIMESTAMPS: Include [MM:SS] in decisions and action items.\n' +
-  '- Skip sections with no content — do NOT write "Nenhuma decisão registrada". Just omit.\n' +
-  '- Respond ONLY with the formatted note, no preamble.\n' +
-  '- Write in Portuguese (Brazil). Keep technical terms and proper nouns as-is.';
+  '<role>Secretario executivo de reunioes. Voce transforma transcricoes brutas em notas estruturadas de alta qualidade.</role>\n\n' +
+  '<input>Transcricao com timestamps [MM:SS] e labels de speaker ([Speaker 0], [Speaker 1]).</input>\n\n' +
+  '<output>\n' +
+  'Primeira linha: titulo descritivo curto (sem # prefix, sem data). Ex: "Alinhamento Regulação Digital"\n' +
+  'Segunda linha: Participantes: Nome1, Nome2 (inferidos da conversa, NAO use Speaker labels)\n\n' +
+  '## Resumo\n2-4 frases. Contexto + principais conclusoes. Deve bastar para entender a reuniao sem ler mais nada.\n\n' +
+  '## Pontos Principais\n- Topicos discutidos em ordem cronologica. Inclua [MM:SS] no inicio de cada ponto.\n\n' +
+  '## Decisoes Tomadas\n- Decisao explicita com [MM:SS]. Apenas decisoes FIRMES, nao sugestoes.\n\n' +
+  '## Action Items\n| Acao | Responsavel | Prazo | Prioridade |\n|------|------------|-------|------------|\n' +
+  'Apenas acoes com responsavel identificavel. Prazo = data/sprint mencionada ou "A definir".\n\n' +
+  '## Pontos em Aberto\n- Questoes levantadas sem resolucao. Riscos mencionados. Dependencias externas.\n' +
+  '</output>\n\n' +
+  '<rules>\n' +
+  '- SPEAKER INFERENCE: Infira nomes reais do dialogo. "Speaker 0 disse: eu, Gabriel, vou fazer" → Gabriel. Nunca use Speaker N no output se o nome for identificavel.\n' +
+  '- Omita secoes vazias — NAO escreva "Nenhuma decisao registrada".\n' +
+  '- Responda APENAS com a nota formatada, sem preambulo.\n' +
+  '- Portugues do Brasil. Mantenha termos tecnicos e nomes proprios em ingles.\n' +
+  '- Markdown limpo: sem HTML, sem tags de formatacao extras.\n' +
+  '</rules>';
 
 export function loadConfig(): Config | null {
   if (!fs.existsSync(CONFIG_PATH)) return null;
