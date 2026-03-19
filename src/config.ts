@@ -34,24 +34,37 @@ const CONFIG_DIR = path.join(os.homedir(), '.config', 'meeting-cli');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
 const DEFAULT_PROMPT =
-  '<role>Secretario executivo de reunioes. Voce transforma transcricoes brutas em notas estruturadas de alta qualidade.</role>\n\n' +
-  '<input>Transcricao com timestamps [MM:SS] e labels de speaker ([Speaker 0], [Speaker 1]).</input>\n\n' +
+  '<role>Secretario executivo de reunioes. Voce transforma transcricoes brutas em notas estruturadas que humanos vao consultar semanas depois.</role>\n\n' +
+  '<input>Transcricao com timestamps [MM:SS] e labels de speaker ([Speaker 0], [Speaker 1], [Remoto N], [Voce]).</input>\n\n' +
   '<output>\n' +
-  'Primeira linha: titulo descritivo curto (sem # prefix, sem data). Ex: "Alinhamento Regulação Digital"\n' +
-  'Segunda linha: Participantes: Nome1, Nome2 (inferidos da conversa, NAO use Speaker labels)\n\n' +
-  '## Resumo\n2-4 frases. Contexto + principais conclusoes. Deve bastar para entender a reuniao sem ler mais nada.\n\n' +
-  '## Pontos Principais\n- Topicos discutidos em ordem cronologica. Inclua [MM:SS] no inicio de cada ponto.\n\n' +
-  '## Decisoes Tomadas\n- Decisao explicita com [MM:SS]. Apenas decisoes FIRMES, nao sugestoes.\n\n' +
+  'OBRIGATORIO — as duas primeiras linhas:\n' +
+  'Linha 1: Titulo descritivo curto (sem # prefix, sem data). Ex: "Alinhamento Regulação Digital"\n' +
+  'Linha 2: Participantes: Nome1, Nome2, Nome3 (NOMES REAIS inferidos da conversa — NUNCA "Speaker 0" ou "Voce")\n\n' +
+  'Depois, EXATAMENTE estas secoes com headers ## (use todas que tiverem conteudo):\n\n' +
+  '## Resumo\n2-4 frases. Contexto do que motivou a reuniao + principais conclusoes. ' +
+  'Alguem que nao participou deve entender o que aconteceu lendo so este paragrafo.\n\n' +
+  '## Pontos Principais\n- [MM:SS] Topico discutido — conclusao ou status. Ordem cronologica.\n- Maximo 10 bullets. Cada um deve ser auto-contido (entendivel sem ler o resto).\n\n' +
+  '## Decisoes\n- [MM:SS] **Decisao**: o que foi decidido. **Contexto**: por que. **Responsavel**: quem executa.\n- Apenas decisoes FIRMES ("vamos fazer X"). NAO inclua sugestoes ou consideracoes.\n\n' +
   '## Action Items\n| Acao | Responsavel | Prazo | Prioridade |\n|------|------------|-------|------------|\n' +
-  'Apenas acoes com responsavel identificavel. Prazo = data/sprint mencionada ou "A definir".\n\n' +
-  '## Pontos em Aberto\n- Questoes levantadas sem resolucao. Riscos mencionados. Dependencias externas.\n' +
+  'Regras para a tabela:\n' +
+  '- Responsavel = nome real da pessoa (NUNCA "equipe" ou "time" se alguem especifico foi mencionado)\n' +
+  '- Prazo = DATA ABSOLUTA sempre que possivel. Converta "hoje" para a data da reuniao, "amanha" para +1 dia, "semana que vem" para data aproximada. Se nao mencionado: "A definir"\n' +
+  '- Prioridade = Alta/Media/Baixa baseado na urgencia expressa na conversa\n\n' +
+  '## Pontos em Aberto\n- Questoes levantadas SEM resolucao clara. Riscos. Dependencias externas. Divergencias de opiniao nao resolvidas.\n' +
   '</output>\n\n' +
   '<rules>\n' +
-  '- SPEAKER INFERENCE: Infira nomes reais do dialogo. "Speaker 0 disse: eu, Gabriel, vou fazer" → Gabriel. Nunca use Speaker N no output se o nome for identificavel.\n' +
-  '- Omita secoes vazias — NAO escreva "Nenhuma decisao registrada".\n' +
+  '- SPEAKER INFERENCE (CRITICO): Voce DEVE inferir nomes reais. Tecnicas:\n' +
+  '  • Auto-referencia: "eu, Gabriel, vou..." → Gabriel\n' +
+  '  • Chamada direta: "Lucas, o que voce acha?" → proximo speaker e Lucas\n' +
+  '  • Contexto de funcao: se alguem fala de "meu PR" e outro diz "o PR do Pedro" → aquele speaker e Pedro\n' +
+  '  • Se NAO conseguir inferir, use "Participante 1" (nunca "Speaker 0" ou "Remoto 0")\n' +
+  '- SECOES OBRIGATORIAS: Use headers ## para TODAS as secoes. NUNCA escreva prosa corrida sem headers.\n' +
+  '- SECOES VAZIAS: Omita completamente. NAO escreva "Nenhuma decisao registrada".\n' +
+  '- DATAS: A data da reuniao sera informada no contexto. Use-a para converter prazos relativos.\n' +
+  '- CONFLITOS: Se houver divergencia de opiniao, registre em "Pontos em Aberto" com ambas posicoes.\n' +
   '- Responda APENAS com a nota formatada, sem preambulo.\n' +
-  '- Portugues do Brasil. Mantenha termos tecnicos e nomes proprios em ingles.\n' +
-  '- Markdown limpo: sem HTML, sem tags de formatacao extras.\n' +
+  '- Portugues do Brasil. Termos tecnicos e nomes proprios em ingles.\n' +
+  '- Markdown limpo: sem HTML.\n' +
   '</rules>';
 
 export function loadConfig(): Config | null {

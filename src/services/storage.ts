@@ -107,6 +107,7 @@ export async function createMeetingNote(
     tags?: string[];
     title?: string;
     participants?: string[];
+    meetingType?: string;
   }
 ): Promise<string> {
   const meetingsDir = path.join(config.vaultPath, 'Meetings');
@@ -122,15 +123,19 @@ export async function createMeetingNote(
   const allTags = [...new Set([...baseTags, ...(params.tags || [])])];
   const participantsList = params.participants && params.participants.length > 0
     ? `\nparticipants: [${params.participants.join(', ')}]` : '';
+  const meetingType = params.meetingType || 'default';
+  const audioEmbed = params.audioPath ? `![[${params.audioPath}]]\n` : '';
 
   const content = `---
 type: meeting
+meeting_type: ${meetingType}
 tags: [${allTags.join(', ')}]${participantsList}
 date: ${params.date}
 time: ${params.time}
 title: "${title}"
 status: done
 audio_seconds: ${Math.round(params.durationSec)}
+audio_deleted: ${!params.audioPath}
 transcription_model: deepgram
 ai_model: ${params.chatDeployment}
 ai_input_tokens: ${params.inputTokens}
@@ -142,12 +147,12 @@ estimated_cost_usd: ${totalCost}
 ---
 # ${title}
 
-${params.audioPath ? `![[${params.audioPath}]]` : ''}
-
-## AI Summary
+${audioEmbed}
 ${params.summary}
 
-## Transcription
+---
+
+## Transcricao
 ${params.transcript}
 `;
 

@@ -24,14 +24,33 @@ function authHeader(config: Config): Record<string, string> {
   return { Authorization: `Bearer ${config.chatApiKey}` };
 }
 
-export async function organizeTranscript(transcript: string, config: Config): Promise<OrganizeResult> {
+export interface OrganizeOptions {
+  meetingDate?: string;     // YYYY-MM-DD for date resolution
+  participants?: string[];  // from calendar, helps speaker inference
+  extraContext?: string;    // additional context (past meetings, etc.)
+}
+
+export async function organizeTranscript(transcript: string, config: Config, options?: OrganizeOptions): Promise<OrganizeResult> {
   const url = buildUrl(config);
+
+  // Build user message with metadata context
+  let userContent = '';
+  if (options?.meetingDate) {
+    userContent += `Data da reuniao: ${options.meetingDate}\n`;
+  }
+  if (options?.participants && options.participants.length > 0) {
+    userContent += `Participantes esperados (calendario): ${options.participants.join(', ')}\n`;
+  }
+  if (options?.extraContext) {
+    userContent += `\nContexto adicional:\n${options.extraContext}\n`;
+  }
+  userContent += `\nTranscription:\n\n${transcript}`;
 
   const payload = {
     model: config.chatModel || 'gpt-4o-mini',
     messages: [
       { role: 'system', content: config.organizationPrompt },
-      { role: 'user', content: `Transcription:\n\n${transcript}` },
+      { role: 'user', content: userContent },
     ],
     temperature: 1,
     max_tokens: 4000,

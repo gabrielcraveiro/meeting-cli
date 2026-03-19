@@ -814,7 +814,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     const configWithPrompt = { ...config, organizationPrompt: finalPrompt };
 
     try {
-      const result = await organizeTranscript(transcriptForAI, configWithPrompt);
+      const result = await organizeTranscript(transcriptForAI, configWithPrompt, {
+        meetingDate: date,
+        participants: calendarAttendees.length > 0 ? calendarAttendees : undefined,
+        extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
+      });
       summary = result.text;
       chatCost = result.costUsd;
       inputTokens = result.inputTokens;
@@ -891,6 +895,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       tags: detectedTags,
       title: meetingTitle,
       participants,
+      meetingType: templateName,
     });
     s.success({ text: path.basename(notePath) });
 
