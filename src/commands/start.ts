@@ -5,8 +5,8 @@ import { spawn, ChildProcess } from 'child_process';
 import chalk from 'chalk';
 import { createSpinner } from 'nanospinner';
 import boxen from 'boxen';
-// gradient-string no longer needed — TUI header handles branding
 import { requireConfig } from '../config';
+import { createTUI } from '../tui/index';
 import { transcribeFile, transcribeFull } from '../services/transcriber';
 import { organizeTranscript, chatWithMeetings } from '../services/organizer';
 import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
@@ -90,213 +90,84 @@ function mergeWavSegments(segmentPaths: string[], outputPath: string): void {
 // Footer: input bar with commands hint
 // Middle: scroll region for transcript, insights, chat
 
-const ESC = '\x1b[';
+// ── TUI Adapter ──
+// Wraps the new MVU-based TUI with the legacy API so existing call sites stay unchanged.
+// Phase 5: all rendering, input handling, and overlays are delegated to src/tui/.
 
 class TerminalUI {
-  private rows = process.stdout.rows || 24;
-  private cols = process.stdout.columns || 80;
-  private headerLines = 3;    // header occupies top 3 lines
-  private transcriptLines = 3; // compact transcript zone (last N lines)
-  private footerLines = 2;    // input bar at bottom (prompt + input)
+  private tui = createTUI({ transcriptLines: 3 });
   private active = false;
-  private currentTime = '00:00';
-  private currentSegments = 0;
   private currentCost = 0;
-  private currentExtra = '';
-  private templateLabel = '';
-  private topicLabel = '';
-  private transcriptBuffer: string[] = [];  // rolling buffer of last transcript lines
-  private inputLine = '';  // current user input text
-  private isPaused = false;  // pause state for header display
+  private currentSegments = 0;
+  private elapsedSec = 0;
 
   init() {
-    this.rows = process.stdout.rows || 24;
-    this.cols = process.stdout.columns || 80;
     this.active = true;
-
-    // Enter alternate screen buffer (like vim/Claude Code — no scroll history leaks)
-    process.stdout.write(`${ESC}?1049h`);
-    // Hide cursor during initial draw
-    process.stdout.write(`${ESC}?25l`);
-    process.stdout.write(`${ESC}2J${ESC}H`);
-
-    this._drawHeader();
-    this._drawTranscriptZone();
-    this._setScrollRegion();
-    this._drawFooter();
-
-    // Move cursor to input line
-    this._moveCursorToInput();
-
-    // Handle terminal resize
-    process.stdout.on('resize', () => {
-      this.rows = process.stdout.rows || 24;
-      this.cols = process.stdout.columns || 80;
-      this._drawHeader();
-      this._drawTranscriptZone();
-      this._setScrollRegion();
-      this._drawFooter();
-      this._moveCursorToInput();
-    });
+    this.tui.init();
   }
 
   setLabels(template: string, topic: string) {
-    this.templateLabel = template;
-    this.topicLabel = topic;
+    this.tui.dispatch({ type: 'SET_LABELS', template, topic });
   }
 
   setPaused(paused: boolean) {
-    this.isPaused = paused;
-    this._drawHeader();
-  }
-
-  // Scroll region: between transcript zone and footer
-  private _scrollTop() { return this.headerLines + this.transcriptLines + 2; } // +1 separator +1 for 1-based
-  private _scrollBottom() { return this.rows - this.footerLines; }
-
-  private _setScrollRegion() {
-    process.stdout.write(`${ESC}${this._scrollTop()};${this._scrollBottom()}r`);
-  }
-
-  private _drawHeader() {
-    if (!this.active) return;
-
-    process.stdout.write(`${ESC}r`);  // reset scroll region to write header
-
-    const recording = this.isPaused
-      ? chalk.hex('#e5c07b').bold(' ⏸ PAUSED')
-      : chalk.hex('#e06c75').bold(' ● REC');
-    const time = chalk.hex('#ffffff').bold(this.currentTime);
-    const segs = chalk.hex('#5c6370')(`${this.currentSegments} seg`);
-    const cost = chalk.hex('#5c6370')(`$${this.currentCost.toFixed(4)}`);
-    const extra = this.currentExtra ? chalk.hex('#e5c07b')(` ${this.currentExtra}`) : '';
-    const sep = chalk.hex('#5c6370')('│');
-
-    process.stdout.write(`${ESC}1;1H${ESC}2K`);
-    process.stdout.write(`${recording}  ${time}  ${sep}  ${segs}  ${sep}  ${cost}${extra}`);
-
-    process.stdout.write(`${ESC}2;1H${ESC}2K`);
-    const parts: string[] = [];
-    if (this.templateLabel) parts.push(chalk.hex('#c678dd')(this.templateLabel));
-    if (this.topicLabel) parts.push(chalk.hex('#56b6c2')(`⟨${this.topicLabel}⟩`));
-    parts.push(chalk.hex('#98c379')('Mic ✔') + '  ' + chalk.hex('#98c379')('Sys ✔'));
-    process.stdout.write(`  ${parts.join(`  ${sep}  `)}`);
-
-    process.stdout.write(`${ESC}3;1H${ESC}2K`);
-    process.stdout.write(chalk.hex('#3e4451')('─'.repeat(Math.min(this.cols, 80))));
-
-    this._setScrollRegion();
-    this._moveCursorToInput();
-  }
-
-  private _drawTranscriptZone() {
-    if (!this.active) return;
-
-    process.stdout.write(`${ESC}r`);
-
-    const startRow = this.headerLines + 1;
-    const visible = this.transcriptBuffer.slice(-this.transcriptLines);
-
-    for (let i = 0; i < this.transcriptLines; i++) {
-      const row = startRow + i;
-      process.stdout.write(`${ESC}${row};1H${ESC}2K`);
-      if (i < visible.length) {
-        const line = visible[i].slice(0, this.cols - 2);
-        process.stdout.write(chalk.hex('#abb2bf')(`  ${line}`));
-      }
-    }
-
-    const sepRow = startRow + this.transcriptLines;
-    process.stdout.write(`${ESC}${sepRow};1H${ESC}2K`);
-    process.stdout.write(chalk.hex('#3e4451')('─'.repeat(Math.min(this.cols, 80))));
-
-    this._setScrollRegion();
-    this._moveCursorToInput();
-  }
-
-  private _drawFooter(hint?: string) {
-    if (!this.active) return;
-
-    process.stdout.write(`${ESC}r`);
-
-    // Separator line above input
-    const sepRow = this.rows - 1;
-    process.stdout.write(`${ESC}${sepRow};1H${ESC}2K`);
-    process.stdout.write(chalk.hex('#3e4451')('─'.repeat(Math.min(this.cols, 80))));
-
-    // Input line
-    const inputRow = this.rows;
-    process.stdout.write(`${ESC}${inputRow};1H${ESC}2K`);
-    const commands = chalk.hex('#5c6370')('/stop /pause /ctx');
-    const prompt = hint || chalk.hex('#61afef').bold(' › ') + chalk.hex('#abb2bf')(this.inputLine);
-    process.stdout.write(`  ${commands}  ${prompt}`);
-
-    this._setScrollRegion();
-    this._moveCursorToInput();
-  }
-
-  private _moveCursorToInput() {
-    if (!this.active) return;
-    // Prefix: "  /stop /pause /ctx   › " = 2+17+2+3 = 24 visible chars
-    const inputRow = this.rows;
-    const col = 24 + this.inputLine.length + 1; // +1 for 1-based column
-    process.stdout.write(`${ESC}${inputRow};${col}H`);
+    this.tui.dispatch({ type: 'SET_EXTRA', extra: paused ? '⏸ PAUSED' : '' });
   }
 
   drawStatusBar(time: string, segments: number, extra?: string) {
-    this.currentTime = time;
     this.currentSegments = segments;
-    if (extra !== undefined) this.currentExtra = extra;
-    this._drawHeader();
+    if (extra !== undefined) {
+      this.tui.dispatch({ type: 'SET_EXTRA', extra });
+    }
+    // Parse time string to seconds for TICK
+    const parts = time.split(':');
+    this.elapsedSec = (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
+    this.tui.dispatch({
+      type: 'TICK',
+      elapsed: this.elapsedSec,
+      segments: this.currentSegments,
+      cost: this.currentCost,
+    });
   }
 
   updateCost(cost: number) {
     this.currentCost = cost;
   }
 
+  showStatus(time: string, segments: number) {
+    this.drawStatusBar(time, segments);
+  }
+
   drawInputBar(hint?: string) {
-    this._drawFooter(hint);
+    if (hint) {
+      this.tui.dispatch({ type: 'INPUT_SET_HINT', hint });
+    }
   }
 
-  setInput(text: string) {
-    this.inputLine = text;
-    this._drawFooter();
+  setInput(_text: string) {
+    // No-op: new TUI handles input display internally via InputHandler
   }
 
-  // Update transcript zone (fixed area, shows last N lines)
   updateTranscript(line: string) {
-    this.transcriptBuffer.push(line);
-    this._drawTranscriptZone();
+    this.tui.dispatch({ type: 'TRANSCRIPT_LINE', text: line });
   }
 
-  // Append to chat/insights scroll region (main scrollable area)
   appendLine(text: string) {
     if (!this.active) {
       console.log(text);
       return;
     }
-    const scrollBottom = this._scrollBottom();
-    process.stdout.write(`${ESC}${scrollBottom};1H`);
-    process.stdout.write(`${text}\n`);
-    this._moveCursorToInput();
-  }
-
-  showStatus(time: string, segments: number) {
-    this.currentTime = time;
-    this.currentSegments = segments;
-    this._drawHeader();
+    this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text, category: 'formatted' } });
   }
 
   teardown() {
     if (!this.active) return;
     this.active = false;
-    // Reset scroll region
-    process.stdout.write(`${ESC}r`);
-    // Show cursor
-    process.stdout.write(`${ESC}?25h`);
-    // Leave alternate screen buffer (restores previous terminal content)
-    process.stdout.write(`${ESC}?1049l`);
+    this.tui.teardown();
   }
+
+  // Access the underlying TUI for onSubmit/onSignal wiring
+  get raw() { return this.tui; }
 }
 
 const INSIGHT_PROMPT = `<role>Analista de reunioes em tempo real. Voce recebe transcrições incrementais e extrai sinais de decisao.</role>
@@ -535,7 +406,12 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     if (transcriptLines.length < 3) return;
 
     insightBusy = true;
-    const currentTranscript = transcriptLines.join('\n');
+    // Cost optimization: send only NEW lines since last insight (delta), with brief context summary
+    const newLines = transcriptLines.slice(lastInsightLineCount);
+    const contextSummary = lastInsightLineCount > 0
+      ? `[Contexto: ${lastInsightLineCount} linhas anteriores ja analisadas. Foque no trecho NOVO abaixo.]\n\n`
+      : '';
+    const currentTranscript = contextSummary + newLines.join('\n');
     lastInsightLineCount = transcriptLines.length;
 
     try {
@@ -1212,26 +1088,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     insightInterval = setInterval(runAutoInsight, INSIGHT_INTERVAL_MS);
   }, 2 * 60 * 1000);
 
-  // ── Readline for chat ──
-  // Use a silent writable stream so readline doesn't echo to stdout (which corrupts the TUI).
-  // We handle display manually via ui.setInput() and ui.appendLine().
-  const nullOutput = new (require('stream').Writable)({ write(_c: any, _e: any, cb: any) { cb(); } });
-  let rl: readline.Interface | null = readline.createInterface({
-    input: process.stdin,
-    output: nullOutput,
-    terminal: true,
-    prompt: '',
-  });
-
-  // Mirror keystrokes to TUI footer
-  process.stdin.on('data', () => {
-    // Only update if readline is active (not in finalization)
-    if (!rl || stopping) return;
-    // After readline processes the input, grab its current line
-    setImmediate(() => {
-      if (rl) ui.setInput((rl as any).line || '');
-    });
-  });
+  // ── Input handling via TUI ──
+  // The new TUI uses raw stdin internally (InputHandler) — no readline needed.
+  let rl: { close: () => void } | null = { close() {} };  // stub for cleanup compatibility
 
   // Semantic context: injected after first transcription (not upfront) or pre-loaded via topic
 
@@ -1258,10 +1117,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     return msg;
   }
 
-  rl.on('line', async (input: string) => {
-    // Clear input display after submit
-    ui.setInput('');
-
+  ui.raw.onSubmit(async (input: string) => {
     const text = input.trim();
     if (!text) return;
 
@@ -1408,21 +1264,23 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     chatBusy = false;
   });
 
-  // Ctrl+C — graceful shutdown
-  process.on('SIGINT', () => {
-    if (userRequestedStop) {
-      cleanupAndExit(1);
-    }
-    userRequestedStop = true;
-    ui.appendLine(chalk.blue('  Parando gravacao... aguarde a finalizacao.'));
-    ui.drawInputBar(' Finalizando...');
-    if (captureProcess && !stopping) {
-      try { captureProcess.stdin?.write('q\n'); } catch {}
-      setTimeout(() => {
-        if (captureProcess && !stopping) captureProcess.kill('SIGINT');
-      }, 3000);
-    } else {
-      cleanupAndExit(0);
+  // Ctrl+C / stop signal — graceful shutdown
+  ui.raw.onSignal((signal) => {
+    if (signal === 'stop') {
+      if (userRequestedStop) {
+        cleanupAndExit(1);
+      }
+      userRequestedStop = true;
+      ui.appendLine(chalk.blue('  Parando gravacao... aguarde a finalizacao.'));
+      ui.drawInputBar(' Finalizando...');
+      if (captureProcess && !stopping) {
+        try { captureProcess.stdin?.write('q\n'); } catch {}
+        setTimeout(() => {
+          if (captureProcess && !stopping) captureProcess.kill('SIGINT');
+        }, 3000);
+      } else {
+        cleanupAndExit(0);
+      }
     }
   });
 }

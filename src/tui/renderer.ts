@@ -319,6 +319,8 @@ export class Renderer {
         return C.red(`  ${text}`);
       case 'separator':
         return C.separator('  ' + '─'.repeat(Math.min(maxW, 40)));
+      case 'formatted':
+        return `  ${text}`;  // already styled by caller — just indent
       default:
         return `  ${text}`;
     }

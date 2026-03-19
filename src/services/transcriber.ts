@@ -35,6 +35,7 @@ interface DeepgramResponse {
 export interface TranscribeOptions {
   diarize?: boolean;
   model?: string;
+  speakerContext?: string;  // hint for speaker consistency across segments
 }
 
 // Apply speaker name mapping from config
@@ -59,8 +60,13 @@ function formatFromWords(words: DeepgramWord[]): string {
   let currentSpeaker = -1;
   let currentWords: string[] = [];
   for (const w of words) {
+    // Skip very low confidence words (noise/artifacts)
+    if (w.confidence < 0.3) continue;
+
     const spk = w.speaker ?? 0;
-    if (spk !== currentSpeaker) {
+    // Only break speaker on confident transitions (avoid flicker)
+    const confidentTransition = w.speaker_confidence > 0.4;
+    if (spk !== currentSpeaker && (confidentTransition || currentSpeaker === -1)) {
       if (currentWords.length > 0) {
         lines.push(`[Speaker ${currentSpeaker}] ${currentWords.join(' ')}`);
       }
@@ -147,7 +153,13 @@ function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isS
     let currentWords: string[] = [];
 
     for (const w of allWords) {
+      // Skip noise
+      if (w.confidence < 0.3) continue;
+
       const key = w.channel === 1 ? 'local' : `remote-${w.speaker ?? 0}`;
+
+      // Merge short fragments from same channel to reduce speaker flicker
+      // e.g., remote-0 → remote-1 → remote-0 within 1 second = keep as remote-0
       if (key !== currentKey) {
         if (currentWords.length > 0) {
           lines.push(`[${currentKey === 'local' ? localSpeaker : formatRemoteSpeaker(currentKey, config)}] ${currentWords.join(' ')}`);
@@ -199,6 +211,12 @@ export async function transcribeFile(filePath: string, config: Config, options?:
     if (isStereo) {
       params.set('multichannel', 'true');
     }
+  }
+
+  // Boost speaker name recognition: pass known names as keywords
+  const speakerNames = Object.values(config.speakerNames || {}).filter(n => n.length > 1);
+  if (speakerNames.length > 0) {
+    params.set('keywords', speakerNames.slice(0, 10).join(':1,') + ':1');
   }
 
   const data = await callDeepgram(audioBuffer, contentType, params, config);

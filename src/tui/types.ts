@@ -11,7 +11,8 @@ export type ScrollCategory =
   | 'insight'
   | 'system'
   | 'error'
-  | 'separator';
+  | 'separator'
+  | 'formatted';  // pre-formatted with chalk — renderer just indents
 
 export interface ScrollLine {
   text: string;
