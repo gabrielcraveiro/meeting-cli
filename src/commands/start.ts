@@ -161,6 +161,29 @@ class TerminalUI {
     this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text, category: 'formatted' } });
   }
 
+  appendChatUser(text: string) {
+    this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text, category: 'chat-user' } });
+  }
+
+  appendChatAI(text: string) {
+    const cols = this.active ? this.tui.getState().cols : 80;
+    const maxW = cols - 6; // 4 for '    ' prefix + 2 buffer
+    const words = text.split(' ');
+    let current = '';
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (test.length > maxW && current) {
+        this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: current, category: 'chat-ai' } });
+        current = word;
+      } else {
+        current = test;
+      }
+    }
+    if (current) {
+      this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: current, category: 'chat-ai' } });
+    }
+  }
+
   teardown() {
     if (!this.active) return;
     this.active = false;
@@ -1308,7 +1331,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 
     chatBusy = true;
 
-    ui.appendLine(chalk.bold.blue('  > ') + chalk.white(text));
+    ui.appendChatUser(text);
     ui.appendLine(chalk.gray('  pensando...'));
 
     const messages = [
@@ -1324,8 +1347,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       while (chatHistory.length > 20) chatHistory.shift();
 
       for (const rline of response.split('\n')) {
-        if (rline.trim()) {
-          ui.appendLine(chalk.blue('    ') + rline);
+        const trimmed = rline.trim();
+        if (trimmed) {
+          ui.appendChatAI(trimmed);
         }
       }
       ui.appendLine('');

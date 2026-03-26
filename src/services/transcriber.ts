@@ -61,11 +61,11 @@ function formatFromWords(words: DeepgramWord[]): string {
   let currentWords: string[] = [];
   for (const w of words) {
     // Skip very low confidence words (noise/artifacts)
-    if (w.confidence < 0.3) continue;
+    if ((w.confidence ?? 1) < 0.3) continue;
 
     const spk = w.speaker ?? 0;
     // Only break speaker on confident transitions (avoid flicker)
-    const confidentTransition = w.speaker_confidence > 0.4;
+    const confidentTransition = (w.speaker_confidence ?? 1) > 0.4;
     if (spk !== currentSpeaker && (confidentTransition || currentSpeaker === -1)) {
       if (currentWords.length > 0) {
         lines.push(`[Speaker ${currentSpeaker}] ${currentWords.join(' ')}`);
@@ -154,7 +154,7 @@ function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isS
 
     for (const w of allWords) {
       // Skip noise
-      if (w.confidence < 0.3) continue;
+      if ((w.confidence ?? 1) < 0.3) continue;
 
       const key = w.channel === 1 ? 'local' : `remote-${w.speaker ?? 0}`;
 
