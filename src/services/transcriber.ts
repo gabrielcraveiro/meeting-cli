@@ -148,6 +148,17 @@ function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isS
 
     const allWords = [...remoteWords, ...localWords].sort((a, b) => a.start - b.start);
 
+    // Build a set of time intervals where remote speech is active (for bleed detection)
+    // If the mic channel has a word overlapping with confident remote speech, it's likely bleed
+    type Interval = { start: number; end: number };
+    const remoteIntervals: Interval[] = [];
+    for (const w of remoteWords) {
+      if ((w.confidence ?? 0) >= 0.5) remoteIntervals.push({ start: w.start, end: w.end });
+    }
+    function overlapsRemote(start: number, end: number): boolean {
+      return remoteIntervals.some(iv => start < iv.end && end > iv.start);
+    }
+
     const lines: string[] = [];
     let currentKey = '';
     let currentWords: string[] = [];
@@ -155,6 +166,10 @@ function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isS
     for (const w of allWords) {
       // Skip noise
       if ((w.confidence ?? 1) < 0.3) continue;
+
+      // Suppress mic bleed: if this is a local channel word but remote was also speaking
+      // at the same time, it's almost certainly acoustic bleed from the speakers
+      if (w.channel === 1 && overlapsRemote(w.start, w.end)) continue;
 
       const key = w.channel === 1 ? 'local' : `remote-${w.speaker ?? 0}`;
 
@@ -184,6 +199,54 @@ function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isS
   return applySpeakerNames(text, config);
 }
 
+// Strip silence from a stereo WAV buffer before sending to Deepgram.
+// Processes each 20ms frame independently per channel; keeps frames where
+// either channel has energy above threshold. Reduces billable minutes.
+function stripSilenceFromWav(buf: Buffer): Buffer {
+  // WAV header is 44 bytes; samples are Int16 stereo interleaved
+  const HEADER_SIZE = 44;
+  if (buf.length <= HEADER_SIZE) return buf;
+
+  const sampleRate = buf.readUInt32LE(24);
+  const numChannels = buf.readUInt16LE(22);
+  const frameMs = 20;
+  const samplesPerFrame = Math.floor(sampleRate * frameMs / 1000) * numChannels;
+  // -45 dB threshold: ~0.006 amplitude — filters breath/room noise but keeps speech
+  const ENERGY_THRESHOLD = 0.006 * 0.006;
+
+  const pcm16 = new Int16Array(buf.buffer, buf.byteOffset + HEADER_SIZE, (buf.length - HEADER_SIZE) / 2);
+  const keptFrames: Int16Array[] = [];
+
+  for (let offset = 0; offset + samplesPerFrame <= pcm16.length; offset += samplesPerFrame) {
+    let sumSq = 0;
+    for (let i = 0; i < samplesPerFrame; i++) {
+      const s = pcm16[offset + i] / 32768;
+      sumSq += s * s;
+    }
+    const energy = sumSq / samplesPerFrame;
+    if (energy >= ENERGY_THRESHOLD) {
+      keptFrames.push(pcm16.slice(offset, offset + samplesPerFrame));
+    }
+  }
+
+  if (keptFrames.length === 0) return buf; // all silent — return as-is, will be skipped anyway
+
+  const totalSamples = keptFrames.reduce((n, f) => n + f.length, 0);
+  const dataSize = totalSamples * 2;
+  const header = Buffer.from(buf.subarray(0, HEADER_SIZE));
+  // Patch header: data chunk size and RIFF size
+  header.writeUInt32LE(dataSize, 40);
+  header.writeUInt32LE(36 + dataSize, 4);
+  const pcmOut = Buffer.allocUnsafe(dataSize);
+  let pos = 0;
+  for (const frame of keptFrames) {
+    const bytes = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
+    bytes.copy(pcmOut, pos);
+    pos += bytes.length;
+  }
+  return Buffer.concat([header, pcmOut]);
+}
+
 // Unified transcription: supports plain (fast) and diarized (full) modes
 export async function transcribeFile(filePath: string, config: Config, options?: TranscribeOptions): Promise<string> {
   if (!config.deepgramApiKey) {
@@ -193,10 +256,13 @@ export async function transcribeFile(filePath: string, config: Config, options?:
   const diarize = options?.diarize ?? false;
   const model = options?.model || config.deepgramModel || 'nova-2';
 
-  const audioBuffer = fs.readFileSync(filePath);
+  const rawBuffer = fs.readFileSync(filePath);
   const contentType = detectContentType(filePath);
-  const channels = audioBuffer.readUInt16LE(22);
+  const channels = rawBuffer.readUInt16LE(22);
   const isStereo = channels === 2;
+
+  // Strip silence to reduce billable audio duration
+  const audioBuffer = stripSilenceFromWav(rawBuffer);
 
   const params = new URLSearchParams({
     model,

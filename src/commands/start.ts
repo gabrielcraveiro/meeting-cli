@@ -158,7 +158,48 @@ class TerminalUI {
       console.log(text);
       return;
     }
-    this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text, category: 'formatted' } });
+    // Word-wrap plain (unstyled) lines so they don't get truncated by the renderer.
+    // Already-styled lines (with ANSI codes) are passed through as-is — callers that
+    // pre-style must word-wrap themselves (see appendInsightLine).
+    const cols = this.active ? this.tui.getState().cols : 80;
+    const maxW = cols - 4;
+    if (text.includes('\x1b') || [...text].length <= maxW) {
+      // pre-styled or short enough — dispatch directly
+      this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text, category: 'formatted' } });
+    } else {
+      const words = text.split(' ');
+      let current = '';
+      for (const word of words) {
+        const test = current ? `${current} ${word}` : word;
+        if ([...test].length > maxW && current) {
+          this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: current, category: 'formatted' } });
+          current = word;
+        } else {
+          current = test;
+        }
+      }
+      if (current) this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: current, category: 'formatted' } });
+    }
+  }
+
+  // Word-wrap a raw insight line, then apply the chalk styler to each wrapped chunk.
+  appendInsightLine(raw: string, styler: (s: string) => string, prefix: string) {
+    const cols = this.active ? this.tui.getState().cols : 80;
+    const maxW = cols - prefix.length - 4;
+    const words = raw.split(' ');
+    let current = '';
+    let first = true;
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if ([...test].length > maxW && current) {
+        this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: (first ? prefix : '    ') + styler(current), category: 'formatted' } });
+        current = word;
+        first = false;
+      } else {
+        current = test;
+      }
+    }
+    if (current) this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: (first ? prefix : '    ') + styler(current), category: 'formatted' } });
   }
 
   appendChatUser(text: string) {
@@ -172,9 +213,15 @@ class TerminalUI {
     let current = '';
     for (const word of words) {
       const test = current ? `${current} ${word}` : word;
-      if (test.length > maxW && current) {
+      if ([...test].length > maxW && current) {
         this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: current, category: 'chat-ai' } });
-        current = word;
+        // if the word itself is longer than maxW, split it hard
+        let remaining = word;
+        while ([...remaining].length > maxW) {
+          this.tui.dispatch({ type: 'SCROLL_APPEND', line: { text: [...remaining].slice(0, maxW).join(''), category: 'chat-ai' } });
+          remaining = [...remaining].slice(maxW).join('');
+        }
+        current = remaining;
       } else {
         current = test;
       }
@@ -463,18 +510,18 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
         if (!t || t === '-') continue;
 
         const mentionsMe = userPattern.test(t);
-        const prefix = mentionsMe ? chalk.bgYellow.black(' >> ') + ' ' : '  ';
+        const pfx = mentionsMe ? chalk.bgYellow.black(' >> ') + ' ' : '  ';
 
         if (t.includes('[decisao]')) {
-          ui.appendLine(prefix + (mentionsMe ? chalk.green.bold(t) : chalk.green(t)));
+          ui.appendInsightLine(t, s => mentionsMe ? chalk.green.bold(s) : chalk.green(s), pfx);
         } else if (t.includes('[acao]')) {
-          ui.appendLine(prefix + (mentionsMe ? chalk.cyan.bold(t) : chalk.cyan(t)));
+          ui.appendInsightLine(t, s => mentionsMe ? chalk.cyan.bold(s) : chalk.cyan(s), pfx);
         } else if (t.includes('[risco]')) {
-          ui.appendLine(prefix + (mentionsMe ? chalk.red.bold(t) : chalk.red(t)));
+          ui.appendInsightLine(t, s => mentionsMe ? chalk.red.bold(s) : chalk.red(s), pfx);
         } else if (t.includes('[ponto]')) {
-          ui.appendLine(prefix + (mentionsMe ? chalk.white.bold(t) : chalk.white(t)));
+          ui.appendInsightLine(t, s => mentionsMe ? chalk.white.bold(s) : chalk.white(s), pfx);
         } else {
-          ui.appendLine(prefix + (mentionsMe ? chalk.bold(t) : chalk.gray(t)));
+          ui.appendInsightLine(t, s => mentionsMe ? chalk.bold(s) : chalk.gray(s), pfx);
         }
       }
       ui.appendLine(chalk.gray('  ─────────────────────────────────────────'));
@@ -1191,6 +1238,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 
   function buildSystemMsg(): string {
     const currentTranscript = transcriptLines.join('\n');
+    const operatorLine = config.userName
+      ? `- Voce esta conversando com ${config.userName}, o operador desta ferramenta (pode ou nao ser um participante da reuniao)`
+      : '- Voce esta conversando com o operador desta ferramenta — nao assuma que ele e um dos participantes da transcricao';
     let msg = `<role>Assistente de reuniao em tempo real. Voce esta integrado a uma sessao de gravacao ao vivo.</role>
 
 <behavior>
@@ -1199,6 +1249,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 - Se alguem perguntar "o que foi decidido?", consulte a transcricao E reunioes anteriores sobre o mesmo tema
 - Se a informacao nao esta disponivel, diga "nao encontrei isso na transcricao ou contexto" — nao invente
 - Use nomes reais dos participantes quando identificaveis
+${operatorLine}
 </behavior>\n\n`;
 
     if (extraContext.length > 0) {

@@ -17,6 +17,8 @@ export interface Config {
   chatApiKey: string;
   chatModel: string;
   organizationPrompt: string;
+  // Name of the person running the tool (shown to the AI as the chat operator)
+  userName?: string;
   // Speaker name mapping: { "0": "Gabriel", "1": "Ana" }
   speakerNames?: Record<string, string>;
   // Calendar integration
@@ -195,6 +197,11 @@ export async function runConfigWizard(): Promise<void> {
   console.log('  Deixe em branco para pular.\n');
   const icsUrl = await ask(rl, 'URL do calendário .ics', existing?.icsUrl || '');
 
+  // User identity
+  console.log('\n👤 Identidade\n');
+  console.log('  Seu nome é usado pelo assistente de chat para saber com quem está falando.\n');
+  const userName = await ask(rl, 'Seu nome', existing?.userName || '');
+
   // Privacy
   console.log('\n🔒 Privacidade & Compliance\n');
   const currentDelete = existing?.deleteAudioAfterTranscription !== false ? 'sim' : 'nao';
@@ -214,6 +221,7 @@ export async function runConfigWizard(): Promise<void> {
     chatModel,
     organizationPrompt: existing?.organizationPrompt || DEFAULT_PROMPT,
     ...(icsUrl ? { icsUrl } : {}),
+    ...(userName ? { userName } : {}),
     deleteAudioAfterTranscription,
   };
 

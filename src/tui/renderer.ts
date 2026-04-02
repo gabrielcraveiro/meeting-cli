@@ -299,7 +299,10 @@ export class Renderer {
 
   private _styleScrollLine(line: ScrollLine, cols: number): string {
     const maxW = cols - 4;
-    const text = truncate(line.text, maxW);
+    // chat lines are already word-wrapped by appendChatAI/appendChatUser — don't truncate
+    const text = (line.category === 'chat-ai' || line.category === 'chat-user')
+      ? line.text
+      : truncate(line.text, maxW);
 
     switch (line.category) {
       case 'chat-user':
@@ -320,7 +323,7 @@ export class Renderer {
       case 'separator':
         return C.separator('  ' + '─'.repeat(Math.min(maxW, 40)));
       case 'formatted':
-        return `  ${text}`;  // already styled by caller — just indent
+        return text;  // caller manages its own indentation
       default:
         return `  ${text}`;
     }
