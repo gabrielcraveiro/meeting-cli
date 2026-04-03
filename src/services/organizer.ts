@@ -14,6 +14,41 @@ const PRICING = {
   output: 0.60 / 1_000_000,
 };
 
+// Token budget for organization input (~4 chars/token heuristic)
+const TOKEN_BUDGET = 5000;
+const MAX_INPUT_CHARS = TOKEN_BUDGET * 4; // 20_000 chars
+
+function applyTokenBudget(
+  transcript: string,
+  extraContext: string | undefined,
+): { transcript: string; extraContext: string } {
+  let ctx = extraContext ?? '';
+  let tx = transcript;
+
+  const measure = () => tx.length + (ctx ? ctx.length + 20 : 0);
+  if (measure() <= MAX_INPUT_CHARS) return { transcript: tx, extraContext: ctx };
+
+  // Step 1: keep only top-1 related meeting from extraContext
+  const parts = ctx.split('\n---\n');
+  ctx = parts.length > 1 ? parts[0] : '';
+
+  if (measure() <= MAX_INPUT_CHARS) return { transcript: tx, extraContext: ctx };
+
+  // Step 2: truncate transcript to last N lines that fit
+  const budget = MAX_INPUT_CHARS - (ctx ? ctx.length + 20 : 0);
+  const lines = tx.split('\n');
+  const kept: string[] = [];
+  let total = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    total += lines[i].length + 1;
+    if (total > budget) break;
+    kept.unshift(lines[i]);
+  }
+  tx = (kept.length < lines.length ? '[...trecho anterior omitido por limite de contexto]\n' : '') + kept.join('\n');
+
+  return { transcript: tx, extraContext: ctx };
+}
+
 function buildUrl(config: Config): string {
   let base = config.chatEndpoint;
   if (!base.endsWith('/')) base += '/';
@@ -41,10 +76,12 @@ export async function organizeTranscript(transcript: string, config: Config, opt
   if (options?.participants && options.participants.length > 0) {
     userContent += `Participantes esperados (calendario): ${options.participants.join(', ')}\n`;
   }
-  if (options?.extraContext) {
-    userContent += `\nContexto adicional:\n${options.extraContext}\n`;
+  const { transcript: budgetedTranscript, extraContext: budgetedExtra } =
+    applyTokenBudget(transcript, options?.extraContext);
+  if (budgetedExtra) {
+    userContent += `\nContexto adicional:\n${budgetedExtra}\n`;
   }
-  userContent += `\nTranscription:\n\n${transcript}`;
+  userContent += `\nTranscription:\n\n${budgetedTranscript}`;
 
   const payload = {
     model: config.chatModel || 'gpt-4o-mini',
@@ -52,7 +89,7 @@ export async function organizeTranscript(transcript: string, config: Config, opt
       { role: 'system', content: config.organizationPrompt },
       { role: 'user', content: userContent },
     ],
-    temperature: 1,
+    temperature: 0.3,
     max_tokens: 4000,
   };
 

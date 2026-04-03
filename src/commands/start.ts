@@ -261,6 +261,37 @@ Se nenhum ponto relevante: responda exatamente "(sem pontos relevantes ainda)"
 - "Vamos fazer X" = decisao. "Eu vou fazer X" = acao. "E se X acontecer?" = risco
 </guidelines>`;
 
+// ── Utilities ──
+
+// Simple concurrency-limited promise queue (no external deps)
+function createConcurrencyQueue(concurrency: number) {
+  let running = 0;
+  const queue: Array<() => void> = [];
+  return function enqueue<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        running++;
+        task().then(resolve, reject).finally(() => {
+          running--;
+          if (queue.length > 0) queue.shift()!();
+        });
+      };
+      if (running < concurrency) run();
+      else queue.push(run);
+    });
+  };
+}
+
+// Race a promise against a timeout
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout:${label}`)), ms)
+    ),
+  ]);
+}
+
 export async function cmdStart(topicArg?: string, opts: { template?: string } = {}): Promise<void> {
   const config = requireConfig();
 
@@ -371,6 +402,8 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   const segmentRmsDb: Map<number, number> = new Map();
   let skippedSilentSegments = 0;
   let transcribedSegments = 0;
+  let totalBillableSec = 0;  // actual speaking time billed by Deepgram (post silence-stripping)
+  const transcribeQueue = createConcurrencyQueue(2);
   const remoteSpeakerIds = new Set<string>();   // track unique remote speakers across segments
 
   // Pause state
@@ -407,10 +440,12 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 
       ui.updateTranscript(chalk.gray(`transcrevendo ${path.basename(segPath)}...`));
       // Single-pass: nova-3 + diarization on each segment (no re-transcription needed)
-      const text = await transcribeFile(segPath, config, { diarize: true, model: 'nova-3' });
+      const result = await transcribeFile(segPath, config, { diarize: true, model: 'nova-3' });
+      const text = result.text;
       if (!text) return;
 
       transcribedSegments++;
+      totalBillableSec += result.billableSec;
 
       // Track unique remote speakers for multi-speaker fallback detection
       const speakerMatches = text.matchAll(/\[(?:Remoto|Speaker)\s+(\d+)\]/g);
@@ -436,7 +471,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
         }
       }
     } catch (err) {
-      ui.appendLine(chalk.yellow(`  segmento falhou: ${(err as Error).message}`));
+      const segName = path.basename(segPath);
+      const fileSizeKb = (() => { try { return (fs.statSync(segPath).size / 1024).toFixed(0) + 'KB'; } catch { return '?KB'; } })();
+      ui.appendLine(chalk.yellow(`  segmento falhou [${segName} ${fileSizeKb} nova-3]: ${(err as Error).message}`));
     }
   }
 
@@ -464,8 +501,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
             continue;
           }
 
-          await transcribeSegment(path.join(segmentsDir, seg), segIndex * SEGMENT_SECONDS);
-          showTimestamp();
+          transcribeQueue(() => transcribeSegment(path.join(segmentsDir, seg), segIndex * SEGMENT_SECONDS))
+            .then(showTimestamp)
+            .catch(() => {});
         }
       }
     }, 2000);
@@ -568,7 +606,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
         },
       ];
 
-      const response = await chatWithMeetings(messages, config);
+      const response = await withTimeout(
+        chatWithMeetings(messages, config),
+        15_000,
+        'semantic-context'
+      );
       const trimmed = response.trim().toLowerCase();
 
       if (trimmed === 'nenhuma' || trimmed === 'nenhum') return;
@@ -591,7 +633,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       for (const label of labels) {
         ui.appendLine(chalk.gray(`    ${label}`));
       }
-    } catch {
+    } catch (err) {
+      if ((err as Error).message?.startsWith('timeout:')) {
+        ui.appendLine(chalk.yellow('  Contexto semantico: timeout (15s) — continuando sem contexto previo'));
+      }
       // semantic context is optional — don't block recording
     }
   }
@@ -692,10 +737,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
         : `${remoteSpeakerIds.size} speakers remotos detectados`;
       s = createSpinner(`Transcrevendo audio completo (${reason})...`).start();
       try {
-        const fullText = await transcribeFull(finalAudioPath, config);
-        if (fullText.trim()) {
-          fullTranscript = fullText;
-          s.success({ text: `Transcricao: ${fullText.split('\n').length} linhas` });
+        const fullResult = await transcribeFull(finalAudioPath, config);
+        if (fullResult.text.trim()) {
+          fullTranscript = fullResult.text;
+          totalBillableSec += fullResult.billableSec;
+          s.success({ text: `Transcricao: ${fullResult.text.split('\n').length} linhas` });
         } else {
           s.warn({ text: 'Transcricao vazia' });
         }
@@ -1197,7 +1243,14 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     const segMin = (transcribedSegments * SEGMENT_SECONDS) / 60;
     const liveCost = segMin * DEEPGRAM_PER_MIN;
     ui.updateCost(liveCost);  // store cost first, no redraw
-    ui.drawStatusBar(formatTime(elapsedSec), processedSegments.size);  // single redraw
+    const billableMin = Math.round(totalBillableSec / 60);
+    const recordedMin = Math.round(elapsedSec / 60);
+    const speechExtra = paused
+      ? '⏸ PAUSED'
+      : (totalBillableSec > 0 && billableMin < recordedMin
+          ? `${billableMin}min fala / ${recordedMin}min grav`
+          : '');
+    ui.drawStatusBar(formatTime(elapsedSec), processedSegments.size, speechExtra);  // single redraw
 
     if (!warned30 && elapsedSec >= WARN_SECONDS) {
       warned30 = true;

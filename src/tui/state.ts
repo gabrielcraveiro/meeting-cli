@@ -122,9 +122,21 @@ export function update(state: TUIState, action: Action, opts?: TUIOptions): TUIS
 
     case 'SCROLL_APPEND': {
       const scrollLines = [...state.scroll.lines, action.line];
-      // Trim buffer if it exceeds max
+      // Priority trim: discard insight/system lines first, then fall back to FIFO
       if (scrollLines.length > maxScroll) {
-        scrollLines.splice(0, scrollLines.length - maxScroll);
+        const toRemove = scrollLines.length - maxScroll;
+        let removed = 0;
+        for (let i = 0; i < scrollLines.length && removed < toRemove; i++) {
+          const cat = scrollLines[i].category;
+          if (cat === 'insight' || cat === 'system') {
+            scrollLines.splice(i, 1);
+            i--;
+            removed++;
+          }
+        }
+        if (scrollLines.length > maxScroll) {
+          scrollLines.splice(0, scrollLines.length - maxScroll);
+        }
       }
       return {
         ...state,

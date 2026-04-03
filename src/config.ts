@@ -60,6 +60,10 @@ const DEFAULT_PROMPT =
   '  • Chamada direta: "Lucas, o que voce acha?" → proximo speaker e Lucas\n' +
   '  • Contexto de funcao: se alguem fala de "meu PR" e outro diz "o PR do Pedro" → aquele speaker e Pedro\n' +
   '  • Se NAO conseguir inferir, use "Participante 1" (nunca "Speaker 0" ou "Remoto 0")\n' +
+  '  Exemplos:\n' +
+  '  [Speaker 0] "Bom, eu sou a Ana e vou apresentar o relatorio." → Speaker 0 = Ana\n' +
+  '  [Speaker 1] "Concordo com o Carlos." [Speaker 2] "Obrigado." → Speaker 2 provavelmente = Carlos\n' +
+  '  [Speaker 0] "Marcos, voce terminou o deploy?" [Speaker 1] "Sim, subiu ontem." → Speaker 1 = Marcos\n' +
   '- SECOES OBRIGATORIAS: Use headers ## para TODAS as secoes. NUNCA escreva prosa corrida sem headers.\n' +
   '- SECOES VAZIAS: Omita completamente. NAO escreva "Nenhuma decisao registrada".\n' +
   '- DATAS: A data da reuniao sera informada no contexto. Use-a para converter prazos relativos.\n' +

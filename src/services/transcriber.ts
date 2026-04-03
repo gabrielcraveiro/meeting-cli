@@ -38,6 +38,11 @@ export interface TranscribeOptions {
   speakerContext?: string;  // hint for speaker consistency across segments
 }
 
+export interface TranscribeResult {
+  text: string;
+  billableSec: number;  // actual audio duration reported by Deepgram metadata
+}
+
 // Apply speaker name mapping from config
 function applySpeakerNames(text: string, config: Config): string {
   const names = config.speakerNames;
@@ -248,7 +253,7 @@ function stripSilenceFromWav(buf: Buffer): Buffer {
 }
 
 // Unified transcription: supports plain (fast) and diarized (full) modes
-export async function transcribeFile(filePath: string, config: Config, options?: TranscribeOptions): Promise<string> {
+export async function transcribeFile(filePath: string, config: Config, options?: TranscribeOptions): Promise<TranscribeResult> {
   if (!config.deepgramApiKey) {
     throw new Error('deepgramApiKey nao configurado. Run: meeting config');
   }
@@ -283,10 +288,13 @@ export async function transcribeFile(filePath: string, config: Config, options?:
   // Removed: keywords param causes 400 errors on nova-3 and pt language models
 
   const data = await callDeepgram(audioBuffer, contentType, params, config);
-  return diarize ? formatDiarizedTranscription(data, config, isStereo) : formatPlain(data);
+  return {
+    text: diarize ? formatDiarizedTranscription(data, config, isStereo) : formatPlain(data),
+    billableSec: data.metadata?.duration ?? 0,
+  };
 }
 
 // Convenience: full diarized transcription with nova-3
-export async function transcribeFull(filePath: string, config: Config): Promise<string> {
+export async function transcribeFull(filePath: string, config: Config): Promise<TranscribeResult> {
   return transcribeFile(filePath, config, { diarize: true, model: 'nova-3' });
 }

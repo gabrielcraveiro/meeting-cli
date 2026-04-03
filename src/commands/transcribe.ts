@@ -24,7 +24,8 @@ export async function cmdTranscribe(filePath: string, opts: { template?: string;
 
   // Transcribe
   console.log(chalk.blue('\n⏳ Transcrevendo com Deepgram...'));
-  const transcript = await transcribeFull(absPath, config);
+  const transcribeResult = await transcribeFull(absPath, config);
+  const transcript = transcribeResult.text;
 
   if (!transcript.trim()) {
     console.log(chalk.yellow('⚠ Transcrição vazia — nenhuma fala detectada.'));
@@ -32,6 +33,10 @@ export async function cmdTranscribe(filePath: string, opts: { template?: string;
   }
 
   console.log(chalk.green(`✓ Transcrição: ${transcript.split('\n').length} linhas`));
+  if (transcribeResult.billableSec > 0) {
+    const billableMin = (transcribeResult.billableSec / 60).toFixed(1);
+    console.log(chalk.gray(`   Fala detectada: ${billableMin}min cobráveis`));
+  }
   console.log(chalk.gray('─'.repeat(60)));
   console.log(chalk.cyan(transcript));
   console.log(chalk.gray('─'.repeat(60)));
