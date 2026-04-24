@@ -15,8 +15,8 @@ const PRICING = {
 };
 
 // Token budget for organization input (~4 chars/token heuristic)
-const TOKEN_BUDGET = 5000;
-const MAX_INPUT_CHARS = TOKEN_BUDGET * 4; // 20_000 chars
+const TOKEN_BUDGET = 60_000;
+const MAX_INPUT_CHARS = TOKEN_BUDGET * 4; // 240_000 chars
 
 function applyTokenBudget(
   transcript: string,
@@ -34,17 +34,32 @@ function applyTokenBudget(
 
   if (measure() <= MAX_INPUT_CHARS) return { transcript: tx, extraContext: ctx };
 
-  // Step 2: truncate transcript to last N lines that fit
+  // Step 2: truncate transcript keeping beginning + end (middle cut)
+  // Meetings usually set context at the start and wrap up at the end
   const budget = MAX_INPUT_CHARS - (ctx ? ctx.length + 20 : 0);
   const lines = tx.split('\n');
-  const kept: string[] = [];
-  let total = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    total += lines[i].length + 1;
-    if (total > budget) break;
-    kept.unshift(lines[i]);
+  const marker = '\n[...trecho intermediario omitido por limite de contexto]\n';
+  const halfBudget = Math.floor((budget - marker.length) / 2);
+
+  // Keep first lines up to half budget
+  const head: string[] = [];
+  let headLen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (headLen + lines[i].length + 1 > halfBudget) break;
+    head.push(lines[i]);
+    headLen += lines[i].length + 1;
   }
-  tx = (kept.length < lines.length ? '[...trecho anterior omitido por limite de contexto]\n' : '') + kept.join('\n');
+
+  // Keep last lines up to other half budget
+  const tail: string[] = [];
+  let tailLen = 0;
+  for (let i = lines.length - 1; i >= head.length; i--) {
+    if (tailLen + lines[i].length + 1 > halfBudget) break;
+    tail.unshift(lines[i]);
+    tailLen += lines[i].length + 1;
+  }
+
+  tx = head.join('\n') + marker + tail.join('\n');
 
   return { transcript: tx, extraContext: ctx };
 }

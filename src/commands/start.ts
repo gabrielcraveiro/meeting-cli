@@ -320,9 +320,22 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
 
       const pickerRl = readline.createInterface({ input: process.stdin, output: process.stdout });
       const answer = await new Promise<string>((resolve) => {
+        let resolved = false;
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            process.stdout.write('\n  ⏱ Timeout 15s — iniciando sem contexto de call\n');
+            pickerRl.close();
+            resolve('');
+          }
+        }, 15_000);
         pickerRl.question('  Qual reunião? ', (a: string) => {
-          pickerRl.close();
-          resolve(a.trim());
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            pickerRl.close();
+            resolve(a.trim());
+          }
         });
       });
 
