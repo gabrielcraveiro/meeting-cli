@@ -153,6 +153,10 @@ class TerminalUI {
     this.tui.dispatch({ type: 'TRANSCRIPT_LINE', text: line });
   }
 
+  renameSpeaker(from: string, to: string) {
+    this.tui.dispatch({ type: 'TRANSCRIPT_RENAME', from, to });
+  }
+
   appendLine(text: string) {
     if (!this.active) {
       console.log(text);
@@ -294,6 +298,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 export async function cmdStart(topicArg?: string, opts: { template?: string } = {}): Promise<void> {
   const config = requireConfig();
+  // Each meeting starts fresh — Speaker 0 from last meeting is likely a different person
+  config.speakerNames = {};
 
   let topic = typeof topicArg === 'string' ? topicArg.trim() : '';
   let calendarAttendees: string[] = [];
@@ -454,7 +460,13 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       ui.updateTranscript(chalk.gray(`transcrevendo ${path.basename(segPath)}...`));
       // Single-pass: nova-3 + diarization on each segment (no re-transcription needed)
       const result = await transcribeFile(segPath, config, { diarize: true, model: 'nova-3' });
-      const text = result.text;
+      // Apply names set via /nome during this session
+      let text = result.text;
+      if (text && config.speakerNames) {
+        for (const [id, name] of Object.entries(config.speakerNames)) {
+          text = text.replace(new RegExp(`\\[${id}\\]`, 'g'), `[${name}]`);
+        }
+      }
       if (!text) return;
 
       transcribedSegments++;
@@ -553,14 +565,14 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       ui.appendLine(chalk.bold.magenta('  Insights') + chalk.gray(` (${formatTime(elapsedSec)})`));
 
       // Highlight lines that mention the user by name
-      const userName = (config.speakerNames && Object.values(config.speakerNames).find(n => /gabriel/i.test(n))) || 'Gabriel';
-      const userPattern = new RegExp(userName, 'i');
+      const userName = config.userName || '';
+      const userPattern = userName ? new RegExp(userName, 'i') : null;
 
       for (const line of response.split('\n')) {
         const t = line.trim();
         if (!t || t === '-') continue;
 
-        const mentionsMe = userPattern.test(t);
+        const mentionsMe = userPattern?.test(t) ?? false;
         const pfx = mentionsMe ? chalk.bgYellow.black(' >> ') + ' ' : '  ';
 
         if (t.includes('[decisao]')) {
@@ -771,6 +783,48 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       return;
     }
 
+    // Phase 0: Detect names from self-introductions in the transcript
+    // Looks for patterns like "eu sou Ana", "meu nome é Lucas", "aqui é Pedro"
+    function detectNamesFromSpeech(transcript: string): Map<string, string> {
+      const detected = new Map<string, string>();
+      const namePatterns = [
+        /\beu sou (?:o |a )?([A-ZÀ-ÚÇ][a-zà-úç]+)/,
+        /\bmeu nome(?: é| eh) (?:o |a )?([A-ZÀ-ÚÇ][a-zà-úç]+)/,
+        /\baqui(?: é| eh) (?:o |a )?([A-ZÀ-ÚÇ][a-zà-úç]+)/,
+        /\bpode(m)? chamar (?:de )?([A-ZÀ-ÚÇ][a-zà-úç]+)/,
+        /\bme chamo (?:o |a )?([A-ZÀ-ÚÇ][a-zà-úç]+)/,
+        /\bfalo(?:ndo)? (?:é o |é a |é )?([A-ZÀ-ÚÇ][a-zà-úç]+)/,
+      ];
+      for (const line of transcript.split('\n')) {
+        const labelMatch = line.match(/^\[([^\]]+)\]/);
+        if (!labelMatch) continue;
+        const label = labelMatch[1];
+        if (!/^(Speaker|Remoto) \d+$/.test(label)) continue;
+        if (detected.has(label)) continue;
+        const text = line.slice(labelMatch[0].length);
+        for (const pat of namePatterns) {
+          const m = text.match(pat);
+          if (m?.[m.length - 1]) {
+            detected.set(label, m[m.length - 1]);
+            break;
+          }
+        }
+      }
+      return detected;
+    }
+
+    const speechDetected = detectNamesFromSpeech(fullTranscript);
+    if (speechDetected.size > 0) {
+      console.log(chalk.gray('\n  Nomes detectados por auto-apresentação:'));
+      for (const [label, name] of speechDetected) {
+        if (!config.speakerNames) config.speakerNames = {};
+        const configKey = label.startsWith('Remoto') ? `Speaker ${label.replace('Remoto ', '')}` : label;
+        config.speakerNames[configKey] = name;
+        fullTranscript = fullTranscript.replace(new RegExp(`\\[${label}\\]`, 'g'), `[${name}]`);
+        console.log(chalk.hex('#98c379')(`    ${label} → ${name}`));
+      }
+    }
+
     // Speaker identification: voice fingerprint auto-match + manual wizard for unknowns
     const unknownLabels: Array<{ label: string; configKey: string }> = [];
     const speakerPatterns = fullTranscript.matchAll(/\[(Speaker \d+|Remoto \d+)\]/g);
@@ -808,8 +862,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
           const endSec = startSec + 15;
 
           const matches = await matchSpeaker(finalAudioPath, candidates, startSec, endSec);
-          if (matches.length > 0 && matches[0].similarity >= 0.4) {
-            const bestMatch = matches[0];
+          // Require high confidence AND don't reuse a name already assigned to another speaker
+          const alreadyUsed = new Set(voiceMatched.values());
+          const bestMatch = matches.find(m => m.similarity >= 0.65 && !alreadyUsed.has(m.name));
+          if (bestMatch) {
             voiceMatched.set(label, bestMatch.name);
             console.log(chalk.hex('#98c379')(`    ${label} → ${bestMatch.name} (${(bestMatch.similarity * 100).toFixed(0)}%)`));
           }
@@ -838,6 +894,14 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     } catch {}
 
     if (wizardRl && stillUnknown.length > 0) {
+      // Build ordered list of attendees not yet identified — used as numbered shortcuts
+      const resolvedNames = new Set([
+        ...Object.values(config.speakerNames || {}),
+        ...speechDetected.values(),
+        ...voiceMatched.values(),
+      ]);
+      const attendeeShortcuts = calendarAttendees.filter(a => !resolvedNames.has(a));
+
       console.log(chalk.bold('\n  Speakers nao identificados:\n'));
       for (const { label } of stillUnknown) {
         const tag = `[${label}]`;
@@ -845,14 +909,23 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
         const sample = lines.slice(0, 2).map(l => l.replace(tag, '').trim().slice(0, 80)).join(' | ');
         console.log(chalk.cyan(`  ${label}:`) + chalk.gray(` "${sample}"`));
       }
-      console.log(chalk.gray('  (Enter para pular, nome para salvar no config)\n'));
+      if (attendeeShortcuts.length > 0) {
+        const opts = attendeeShortcuts.map((a, i) => chalk.yellow(`[${i + 1}]`) + ` ${a}`).join('  ');
+        console.log(chalk.gray('\n  Participantes: ') + opts);
+      }
+      console.log(chalk.gray('  (Enter para pular, número ou nome)\n'));
 
       for (const { label, configKey } of stillUnknown) {
-        const name = await new Promise<string>((resolve) => {
+        const answer = await new Promise<string>((resolve) => {
           wizardRl!.question(chalk.cyan(`  ${label} = `), (answer: string) => {
             resolve(answer.trim());
           });
         });
+        // Allow numeric shortcut to select from attendeeShortcuts
+        const num = parseInt(answer);
+        const name = (!isNaN(num) && num >= 1 && num <= attendeeShortcuts.length)
+          ? attendeeShortcuts[num - 1]
+          : answer;
         if (name) {
           if (!config.speakerNames) config.speakerNames = {};
           config.speakerNames[configKey] = name;
@@ -1366,12 +1439,58 @@ ${operatorLine}
       return;
     }
 
+    // /nome <N> <name> or /nome r<N> <name> — rename a speaker in real-time
+    // Examples: /nome 0 Gabriel  /nome r1 Ana  /nome Remoto 1 Lucas
+    if (cmd.startsWith('nome ') || cmd.startsWith('n ')) {
+      const args = text.replace(/^\/+\w+\s+/, '').trim();
+      // Parse: "r1 Ana" | "Remoto 1 Ana" | "0 Gabriel" | "Speaker 0 Gabriel"
+      const remoteShort = args.match(/^r(\d+)\s+(.+)/i);
+      const remoteLong  = args.match(/^(?:remoto\s+)(\d+)\s+(.+)/i);
+      const speakerLong = args.match(/^(?:speaker\s+)?(\d+)\s+(.+)/i);
+
+      let fromLabel = '';
+      let toName = '';
+
+      if (remoteShort) {
+        fromLabel = `Remoto ${remoteShort[1]}`;
+        toName = remoteShort[2].trim();
+      } else if (remoteLong) {
+        fromLabel = `Remoto ${remoteLong[1]}`;
+        toName = remoteLong[2].trim();
+      } else if (speakerLong) {
+        fromLabel = `Speaker ${speakerLong[1]}`;
+        toName = speakerLong[2].trim();
+      }
+
+      if (!fromLabel || !toName) {
+        ui.appendLine(chalk.yellow('  Uso: /nome 0 Gabriel  |  /nome r1 Ana  |  /nome Remoto 1 Lucas'));
+        return;
+      }
+
+      // Update session speakerNames so future segments use the name
+      if (!config.speakerNames) config.speakerNames = {};
+      config.speakerNames[fromLabel] = toName;
+
+      // Retroactively rename in transcriptLines accumulator
+      const renameRe = new RegExp(`\\[${fromLabel}\\]`, 'g');
+      for (let i = 0; i < transcriptLines.length; i++) {
+        transcriptLines[i] = transcriptLines[i].replace(renameRe, `[${toName}]`);
+      }
+
+      // Update the live transcript zone in the TUI
+      ui.renameSpeaker(fromLabel, toName);
+
+      ui.appendLine(chalk.hex('#98c379')(`  ✓ ${fromLabel} → ${toName} (retroativo + próximos segmentos)`));
+      return;
+    }
+
     if (cmd === 'help' || cmd === 'ajuda') {
       ui.appendLine('');
       ui.appendLine(chalk.bold('  Comandos durante gravação:'));
       ui.appendLine('');
       ui.appendLine(`  ${chalk.green('/stop')}              Para a gravação e finaliza`);
       ui.appendLine(`  ${chalk.green('/pause')}             Pausa/retoma a gravação`);
+      ui.appendLine(`  ${chalk.green('/nome')} ${chalk.cyan('<N> <nome>')}    Renomeia speaker (ex: /nome 0 Gabriel, /nome r1 Ana)`);
       ui.appendLine(`  ${chalk.green('/ctx')} ${chalk.cyan('<arquivo>')}     Adiciona arquivo do vault como contexto`);
       ui.appendLine(`  ${chalk.green('/ctx')} ${chalk.cyan('<texto>')}       Adiciona texto livre como contexto`);
       ui.appendLine(`  ${chalk.green('/contexto')}          Mostra contextos carregados`);

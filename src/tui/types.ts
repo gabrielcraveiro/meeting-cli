@@ -88,6 +88,7 @@ export type Action =
 
   // Transcript zone
   | { type: 'TRANSCRIPT_LINE'; text: string }
+  | { type: 'TRANSCRIPT_RENAME'; from: string; to: string }
 
   // Scroll region
   | { type: 'SCROLL_APPEND'; line: ScrollLine }

@@ -118,6 +118,16 @@ export function update(state: TUIState, action: Action, opts?: TUIOptions): TUIS
       };
     }
 
+    case 'TRANSCRIPT_RENAME': {
+      const re = new RegExp(`\\[${action.from}\\]`, 'g');
+      const lines = state.transcript.lines.map(l => l.replace(re, `[${action.to}]`));
+      return {
+        ...state,
+        transcript: { ...state.transcript, lines },
+        dirty: new Set([...state.dirty, 'transcript']),
+      };
+    }
+
     // ── Scroll region ──
 
     case 'SCROLL_APPEND': {

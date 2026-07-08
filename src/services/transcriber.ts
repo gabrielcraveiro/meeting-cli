@@ -43,16 +43,6 @@ export interface TranscribeResult {
   billableSec: number;  // actual audio duration reported by Deepgram metadata
 }
 
-// Apply speaker name mapping from config
-function applySpeakerNames(text: string, config: Config): string {
-  const names = config.speakerNames;
-  if (!names || Object.keys(names).length === 0) return text;
-  let result = text;
-  for (const [id, name] of Object.entries(names)) {
-    result = result.replace(new RegExp(`\\[Speaker ${id}\\]`, 'g'), `[${name}]`);
-  }
-  return result;
-}
 
 function formatDiarized(utterances: DeepgramUtterance[]): string {
   return utterances
@@ -139,9 +129,7 @@ async function callDeepgram(audioBuffer: Buffer, contentType: string, params: UR
 
 // Format diarized transcription with speaker labels and multichannel support
 function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isStereo: boolean): string {
-  const localSpeaker = config.speakerNames?.['local']
-    || Object.values(config.speakerNames || {}).find(n => /gabriel/i.test(n))
-    || 'Voce';
+  const localSpeaker = config.speakerNames?.['local'] || config.userName || 'Voce';
 
   let text: string;
   if (isStereo && data.results.channels && data.results.channels.length >= 2) {
@@ -201,7 +189,7 @@ function formatDiarizedTranscription(data: DeepgramResponse, config: Config, isS
     text = (words && words.length > 0) ? formatFromWords(words) : formatPlain(data);
   }
 
-  return applySpeakerNames(text, config);
+  return text;
 }
 
 // Strip silence from a stereo WAV buffer before sending to Deepgram.
