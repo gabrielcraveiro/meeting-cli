@@ -80,6 +80,31 @@ export interface OrganizeOptions {
   extraContext?: string;    // additional context (past meetings, etc.)
 }
 
+/**
+ * Engine dispatcher: routes to the Claude Code headless engine when configured,
+ * falling back to the plain chat-completion organizer on any failure (claude
+ * binary missing, timeout, error result) so a meeting note is never lost.
+ */
+export async function organize(
+  transcript: string,
+  config: Config,
+  options?: OrganizeOptions,
+): Promise<OrganizeResult & { engine: 'claude' | 'chat' | 'chat-fallback' }> {
+  if (config.organizerEngine === 'claude') {
+    try {
+      const { organizeWithClaude } = await import('./claudeOrganizer');
+      const result = await organizeWithClaude(transcript, config, options);
+      return { ...result, engine: 'claude' };
+    } catch (err) {
+      console.error(`  [claude engine] ${(err as Error).message} — usando engine chat como fallback`);
+      const result = await organizeTranscript(transcript, config, options);
+      return { ...result, engine: 'chat-fallback' };
+    }
+  }
+  const result = await organizeTranscript(transcript, config, options);
+  return { ...result, engine: 'chat' };
+}
+
 export async function organizeTranscript(transcript: string, config: Config, options?: OrganizeOptions): Promise<OrganizeResult> {
   const url = buildUrl(config);
 

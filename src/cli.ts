@@ -11,6 +11,7 @@ import { runConfigWizard, loadConfig } from './config';
 import { cmdSetup, isSidecarInstalled } from './commands/setup';
 import { cmdDoctor } from './commands/doctor';
 import { cmdStats } from './commands/stats';
+import { cmdDaemon } from './commands/daemon';
 import { listTemplates } from './services/templates';
 
 const program = new Command();
@@ -36,6 +37,7 @@ program.helpInformation = function () {
     `    ${chalk.green('meeting start')}                    Inicia gravação com transcrição ao vivo`,
     `    ${chalk.green('meeting start')} ${chalk.cyan('<tópico>')}           Grava com contexto pré-carregado`,
     `    ${chalk.green('meeting start')} ${chalk.yellow('-t daily')}          Usa template de daily standup`,
+    `    ${chalk.green('meeting daemon')}                   Grava automaticamente ao entrar em calls (extensão browser)`,
     `    ${chalk.green('meeting transcribe')} ${chalk.cyan('<arquivo>')}     Transcreve áudio existente`,
     '',
     chalk.bold('  Consulta'),
@@ -65,7 +67,14 @@ program
   .argument('[topic]', 'Tópico ou projeto para pré-carregar contexto de reuniões anteriores')
   .description('Inicia gravação de reunião com transcrição ao vivo')
   .option('-t, --template <name>', 'Template de reunião (daily, 1on1, retro, planning, technical)')
+  .option('--browser', 'Sessão iniciada pela extensão do browser (usa bridge para roster/stop)')
   .action(cmdStart);
+
+program
+  .command('daemon')
+  .description('Escuta a extensão do browser e grava automaticamente ao entrar em calls')
+  .option('-p, --port <port>', 'Porta HTTP local', '7899')
+  .action(cmdDaemon);
 
 program
   .command('transcribe <file>')
@@ -152,6 +161,10 @@ program
     console.log(`  ${chalk.bold('Mic Gain')}    ${cfg.micGain ?? 1.0}`);
     console.log(`  ${chalk.bold('Deepgram')}    ${cfg.deepgramModel || 'nova-2'} | key: ${cfg.deepgramApiKey ? '***' + cfg.deepgramApiKey.slice(-4) : chalk.red('(não configurado)')}`);
     console.log(`  ${chalk.bold('Chat')}        ${cfg.chatModel || 'gpt-4o-mini'} @ ${(cfg.chatEndpoint || '').slice(0, 40)}`);
+    const engine = cfg.organizerEngine === 'claude'
+      ? chalk.green(`claude (${cfg.claudeModel || 'claude-sonnet-5'})`)
+      : `chat (${cfg.chatModel || 'gpt-4o-mini'})`;
+    console.log(`  ${chalk.bold('Organizer')}   ${engine}`);
     console.log('');
   });
 

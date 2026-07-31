@@ -8,12 +8,13 @@ import boxen from 'boxen';
 import { requireConfig } from '../config';
 import { createTUI } from '../tui/index';
 import { transcribeFile, transcribeFull } from '../services/transcriber';
-import { organizeTranscript, chatWithMeetings } from '../services/organizer';
+import { organize, chatWithMeetings } from '../services/organizer';
 import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
 import { getSidecarCapturePath } from './setup';
 import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/templates';
 import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
 import { matchSpeaker, enrollSpeaker } from '../services/voice';
+import { readBridge } from '../services/bridge';
 
 const DEEPGRAM_PER_MIN = 0.0077;  // nova-3 + diarization, single-pass
 const SEGMENT_SECONDS = 45;
@@ -296,7 +297,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-export async function cmdStart(topicArg?: string, opts: { template?: string } = {}): Promise<void> {
+export async function cmdStart(topicArg?: string, opts: { template?: string; browser?: boolean } = {}): Promise<void> {
   const config = requireConfig();
   // Each meeting starts fresh — Speaker 0 from last meeting is likely a different person
   config.speakerNames = {};
@@ -304,8 +305,19 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   let topic = typeof topicArg === 'string' ? topicArg.trim() : '';
   let calendarAttendees: string[] = [];
 
+  // Browser-bridge session: title/participants come from the extension via daemon,
+  // so the interactive calendar picker is skipped (no one is at the terminal).
+  const fromBrowser = opts.browser === true;
+  if (fromBrowser) {
+    const bridge = readBridge();
+    if (bridge) {
+      if (!topic && bridge.title) topic = bridge.title.trim();
+      if (bridge.participants.length > 0) calendarAttendees = [...bridge.participants];
+    }
+  }
+
   // Calendar picker: show upcoming meetings if ICS is configured and no topic given
-  if (config.icsUrl && !topic) {
+  if (config.icsUrl && !topic && !fromBrowser) {
     let meetings: Awaited<ReturnType<typeof getUpcomingMeetings>> = [];
     try {
       meetings = await getUpcomingMeetings(config.icsUrl);
@@ -417,6 +429,8 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
   let insightBusy = false;
   let chatBusy = false;
   let consecutiveSilentSegments = 0;
+  let micDeadSegments = 0;
+  let micWarned = false;
   let semanticContextLoaded = false;
   const segmentRmsDb: Map<number, number> = new Map();
   let skippedSilentSegments = 0;
@@ -1016,7 +1030,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     const configWithPrompt = { ...config, organizationPrompt: finalPrompt };
 
     try {
-      const result = await organizeTranscript(transcriptForAI, configWithPrompt, {
+      const result = await organize(transcriptForAI, configWithPrompt, {
         meetingDate: date,
         participants: calendarAttendees.length > 0 ? calendarAttendees : undefined,
         extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
@@ -1026,7 +1040,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
       inputTokens = result.inputTokens;
       outputTokens = result.outputTokens;
       totalTokens = result.totalTokens;
-      s.success({ text: `IA: ${totalTokens} tokens` });
+      s.success({ text: `IA (${result.engine}): ${totalTokens} tokens` });
     } catch (err) {
       s.error({ text: `IA falhou: ${(err as Error).message}` });
       summary = '> Organizacao automatica falhou.';
@@ -1270,6 +1284,24 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
             ui.appendLine(chalk.red('    - Se ha audio tocando no sistema'));
           }
 
+          // Per-channel monitoring: a dead mic channel with live system audio (or
+          // vice versa) is invisible in the mixed RMS — track peaks separately.
+          const peakMic = parseFloat(evt.peakMic);
+          const peakSys = parseFloat(evt.peakSys);
+          if (!isNaN(peakMic)) {
+            micDeadSegments = peakMic < 0.001 ? micDeadSegments + 1 : 0;
+            if (micDeadSegments === 2 && !micWarned) {
+              micWarned = true;
+              ui.appendLine(chalk.red.bold('  ⚠ Microfone sem sinal ha ~90s (sistema ' +
+                (!isNaN(peakSys) && peakSys >= 0.001 ? 'OK' : 'tambem mudo') + '). Verifique:'));
+              ui.appendLine(chalk.red('    - Mic correto? (meeting config — headsets Bluetooth trocam de ID ao entrar em call)'));
+              ui.appendLine(chalk.red('    - Mute fisico no headset (o mute do Teams nao afeta a captura)'));
+            } else if (micWarned && peakMic >= 0.001) {
+              micWarned = false;
+              ui.appendLine(chalk.green('  ✓ Sinal do microfone voltou'));
+            }
+          }
+
           if (rmsDb < SILENCE_THRESHOLD_DB && !paused) {
             consecutiveSilentSegments++;
             if (consecutiveSilentSegments >= SILENCE_TIMEOUT_SEGMENTS && !stopping) {
@@ -1284,6 +1316,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
           } else {
             consecutiveSilentSegments = 0;
           }
+        } else if (evt.event === 'metadata') {
+          // Device info from the recorder — makes wrong-device issues visible
+          const { event: _e, source, ...rest } = evt;
+          ui.appendLine(chalk.gray(`  [${source}] ${Object.entries(rest).map(([k, v]) => `${k}=${v}`).join(' ')}`));
         } else if (evt.event === 'error') {
           ui.appendLine(chalk.yellow(`  ${evt.source}: ${evt.message}`));
         } else if (evt.event === 'stopped') {
@@ -1318,8 +1354,48 @@ export async function cmdStart(topicArg?: string, opts: { template?: string } = 
     }
   });
 
+  // Browser bridge — poll for remote stop + live roster updates from the extension
+  let bridgeTick = 0;
+  let rosterCtxIndex = -1;
+  const knownBridgeParticipants = new Set(calendarAttendees);
+  function pollBridge(): void {
+    if (!fromBrowser) return;
+    bridgeTick++;
+    if (bridgeTick % 3 !== 0) return;  // every ~3s is enough for a file read
+
+    const bridge = readBridge();
+    if (!bridge) return;
+
+    const newcomers = bridge.participants.filter(p => !knownBridgeParticipants.has(p));
+    if (newcomers.length > 0) {
+      newcomers.forEach(p => { knownBridgeParticipants.add(p); calendarAttendees.push(p); });
+      const rosterBlock =
+        `# Participantes na call (roster do browser)\n`
+        + `Pessoas presentes na call (incluindo ouvintes que não falaram): ${[...knownBridgeParticipants].join(', ')}.\n`
+        + `Esta lista NÃO indica quem são Speaker 0, Speaker 1, etc.`;
+      if (rosterCtxIndex >= 0) {
+        extraContext[rosterCtxIndex] = rosterBlock;  // replace instead of accumulating duplicates
+      } else {
+        rosterCtxIndex = extraContext.push(rosterBlock) - 1;
+      }
+      ui.appendLine(chalk.gray(`  👥 Roster: +${newcomers.join(', +')} (${knownBridgeParticipants.size} na call)`));
+    }
+
+    if (bridge.stopRequested && !userRequestedStop && !stopping) {
+      userRequestedStop = true;
+      ui.appendLine(chalk.blue('  Call encerrada no browser — parando gravação...'));
+      if (captureProcess) {
+        try { captureProcess.stdin?.write('q\n'); } catch {}
+        setTimeout(() => {
+          if (captureProcess && !stopping) captureProcess.kill('SIGINT');
+        }, 3000);
+      }
+    }
+  }
+
   // Timer — header update + safety limits
   timerInterval = setInterval(() => {
+    pollBridge();
     // Subtract paused time from elapsed
     const rawElapsed = Math.floor((Date.now() - startTime) / 1000);
     const currentPause = paused ? Math.floor((Date.now() - pauseStartTime) / 1000) : 0;

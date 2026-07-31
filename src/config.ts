@@ -17,6 +17,10 @@ export interface Config {
   chatApiKey: string;
   chatModel: string;
   organizationPrompt: string;
+  // Note organization engine: 'chat' (default, single LiteLLM completion) or
+  // 'claude' (Claude Code CLI headless with read-only vault research tools)
+  organizerEngine?: 'chat' | 'claude';
+  claudeModel?: string;  // model for the claude engine (default: claude-sonnet-5)
   // Name of the person running the tool (shown to the AI as the chat operator)
   userName?: string;
   // Speaker name mapping: { "0": "Gabriel", "1": "Ana" }

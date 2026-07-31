@@ -3,7 +3,7 @@ import * as path from 'path';
 import chalk from 'chalk';
 import { requireConfig } from '../config';
 import { transcribeFull } from '../services/transcriber';
-import { organizeTranscript } from '../services/organizer';
+import { organize } from '../services/organizer';
 import { createMeetingNote } from '../services/storage';
 import { getTemplate } from '../services/templates';
 
@@ -59,7 +59,7 @@ export async function cmdTranscribe(filePath: string, opts: { template?: string;
     console.log(chalk.gray(`   Template: ${template.label}`));
   }
 
-  const result = await organizeTranscript(transcript, configWithPrompt);
+  const result = await organize(transcript, configWithPrompt);
 
   // Estimate duration from file size (rough: 16kHz mono 16-bit = 32KB/s)
   const ext = path.extname(absPath).toLowerCase();
