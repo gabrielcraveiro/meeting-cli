@@ -767,10 +767,44 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       console.log(chalk.green(`  ${skippedSilentSegments} segmentos silenciosos pulados (economia: ~$${savedCost})`));
     }
 
+    // Caption transcript from the browser bridge: Teams live captions carry the
+    // REAL speaker name per utterance and cover ALL voices (including the local
+    // mic, transcribed on Teams' side). When rich enough, they become the
+    // primary transcript and the Deepgram full-pass is skipped entirely.
+    let captionTranscript = '';
+    let captionUtterances = 0;
+    if (fromBrowser && (config.transcriptSource ?? 'auto') !== 'deepgram') {
+      const bridge = readBridge();
+      const withText = (bridge?.speech ?? []).filter(sp => sp.text && sp.text.trim().length > 0);
+      if (withText.length > 0) {
+        captionUtterances = withText.length;
+        captionTranscript = withText
+          .map(sp => `${formatTimestamp(sp.start)} [${sp.who}] ${sp.text!.trim()}`)
+          .join('\n');
+      }
+    }
+    const captionWords = captionTranscript ? captionTranscript.split(/\s+/).length : 0;
+    const useCaptions = captionTranscript.length > 0 && (
+      config.transcriptSource === 'captions' || captionWords >= 40
+    );
+
     // Re-transcribe when: (a) no segments were processed (short recording), or (b) multi-speaker
     const noSegmentsProcessed = transcribedSegments === 0;
     const needsRetranscription = noSegmentsProcessed || remoteSpeakerIds.size > 1;
-    if (needsRetranscription && fs.existsSync(finalAudioPath)) {
+    if (useCaptions) {
+      // Deepgram live transcript (if any) becomes auxiliary context: better
+      // acoustic quality, worse identity — the organizer cross-checks both.
+      if (fullTranscript.trim()) {
+        extraContext.push(
+          `# Transcricao auxiliar (Deepgram — melhor qualidade acustica, speakers genericos)\n`
+          + `Use para conferir trechos confusos da transcricao principal. A identidade dos `
+          + `speakers da transcricao principal (legendas do Teams) e a correta.\n\n`
+          + fullTranscript
+        );
+      }
+      fullTranscript = captionTranscript;
+      console.log(chalk.green(`  Transcricao: legendas do Teams (${captionUtterances} falas, nomes reais) — Deepgram full-pass ignorado`));
+    } else if (needsRetranscription && fs.existsSync(finalAudioPath)) {
       const reason = noSegmentsProcessed
         ? 'gravacao curta, nenhum segmento processado'
         : `${remoteSpeakerIds.size} speakers remotos detectados`;
@@ -1025,8 +1059,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
 
     // Speaker timeline from Teams live captions (via browser bridge) — ground
     // truth for WHO spoke WHEN. Injected as context so the organizer can map
-    // "Speaker N" labels to real names deterministically.
-    if (fromBrowser) {
+    // "Speaker N" labels to real names deterministically. Redundant when the
+    // captions themselves became the transcript (names already inline).
+    if (fromBrowser && !useCaptions) {
       const bridge = readBridge();
       if (bridge?.speech && bridge.speech.length > 0) {
         const fmt = (s: number) =>

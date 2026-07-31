@@ -122,6 +122,14 @@ program
   });
 
 program
+  .command('audio-test')
+  .description('Grava 10s e mostra o pico de sinal de cada canal (sistema vs microfone)')
+  .action(async () => {
+    const { cmdAudioTest } = await import('./commands/audiotest');
+    await cmdAudioTest();
+  });
+
+program
   .command('doctor')
   .description('Diagnostica problemas de configuracao e conexao')
   .action(cmdDoctor);

@@ -21,6 +21,10 @@ export interface Config {
   // 'claude' (Claude Code CLI headless with read-only vault research tools)
   organizerEngine?: 'chat' | 'claude';
   claudeModel?: string;  // model for the claude engine (default: claude-sonnet-5)
+  // Final transcript source for browser-bridge sessions:
+  // 'auto' (default) — Teams captions when rich (real names, covers local mic), Deepgram otherwise
+  // 'captions' — always prefer captions when present; 'deepgram' — never use captions as transcript
+  transcriptSource?: 'auto' | 'captions' | 'deepgram';
   // Name of the person running the tool (shown to the AI as the chat operator)
   userName?: string;
   // Speaker name mapping: { "0": "Gabriel", "1": "Ana" }

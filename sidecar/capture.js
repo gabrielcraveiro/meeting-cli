@@ -93,7 +93,10 @@ function flushSegment() {
   const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -100;
 
   const peakSys = sysF32.length > 0 ? Math.max(...Array.from(sysF32.slice(0, 1000)).map(Math.abs)) : 0;
-  const peakMic = micF32.length > 0 ? Math.max(...Array.from(micF32.slice(0, 1000)).map(Math.abs)) : 0;
+  // Report the mic peak POST-gain (matching what actually lands in the mix),
+  // clamped like the mix is — otherwise telemetry understates the real level.
+  const peakMicRaw = micF32.length > 0 ? Math.max(...Array.from(micF32.slice(0, 1000)).map(Math.abs)) : 0;
+  const peakMic = Math.min(1, peakMicRaw * MIC_GAIN);
   console.log(JSON.stringify({
     event: 'segment',
     index: segIndex,

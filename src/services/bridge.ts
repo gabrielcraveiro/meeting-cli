@@ -13,6 +13,8 @@ export interface SpeechSpan {
   who: string;
   start: number;  // seconds since call start
   end: number;
+  /** Utterance text from Teams live captions (Azure ASR) */
+  text?: string;
 }
 
 export interface BridgeState {
@@ -67,7 +69,12 @@ export function updateBridgeSpeech(spans: SpeechSpan[]): void {
   const valid = spans.filter(s =>
     typeof s?.who === 'string' && s.who.length > 0 && s.who.length <= 60 &&
     Number.isFinite(s.start) && Number.isFinite(s.end)
-  ).slice(0, 5000);
+  ).slice(0, 5000).map(s => ({
+    who: s.who,
+    start: s.start,
+    end: s.end,
+    text: typeof s.text === 'string' ? s.text.slice(0, 500) : undefined,
+  }));
   writeBridge({ ...current, speech: valid, updatedAt: Date.now() });
 }
 

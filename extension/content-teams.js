@@ -51,7 +51,7 @@
 
   // Speech timeline state
   let speechSpans = [];        // finalized spans {who, start, end} (secs since call start)
-  let currentSpan = null;      // span being extended
+
   let lastFlushedCount = 0;
   let captionsEnableAttempts = 0;
   let lastEnableAttempt = 0;
@@ -123,7 +123,7 @@
 
     // Caption authors are participants too (and 100% correctly named)
     for (const span of speechSpans) names.add(span.who);
-    if (currentSpan) names.add(currentSpan.who);
+
 
     return [...names];
   }
@@ -170,36 +170,69 @@
     }, 400);
   }
 
-  // Sample the ACTIVE (last) caption — author name is the ground truth of who
-  // is speaking right now. Aggregation into spans tolerates caption text
-  // mutating as the ASR refines; we only care about author + time.
-  function sampleActiveSpeaker() {
-    if (!inCall) return;
+  // Scrape caption utterances: author (real name — ground truth) + text.
+  // Caption text mutates while the ASR refines and the list is virtualized
+  // (old messages leave the DOM), so we merge each poll's snapshot into an
+  // accumulated utterance list anchored on the last known utterance.
+  function getCaptionSnapshot() {
     const renderer = document.querySelector(SEL.CAPTIONS_RENDERER);
-    if (!renderer) return;
-    const messages = renderer.querySelectorAll(SEL.CAPTION_MESSAGE);
-    if (messages.length === 0) return;
+    if (!renderer) return [];
+    const out = [];
+    for (const msg of renderer.querySelectorAll(SEL.CAPTION_MESSAGE)) {
+      const authorEl = msg.querySelector(SEL.CAPTION_AUTHOR);
+      const textEl = msg.querySelector('[data-tid="closed-caption-text"]');
+      const who = cleanName(authorEl ? authorEl.textContent : '');
+      const text = (textEl ? textEl.textContent : '').trim().slice(0, 500);
+      if (who && text) out.push({ who, text });
+    }
+    return out;
+  }
 
-    const last = messages[messages.length - 1];
-    const authorEl = last.querySelector(SEL.CAPTION_AUTHOR);
-    const who = cleanName(authorEl ? authorEl.textContent : '');
-    if (!who) return;
+  function sameUtterance(a, b) {
+    if (a.who !== b.who) return false;
+    const shorter = a.text.length <= b.text.length ? a.text : b.text;
+    const longer = a.text.length <= b.text.length ? b.text : a.text;
+    return longer.startsWith(shorter.slice(0, 40));
+  }
 
+  function sampleCaptions() {
+    if (!inCall) return;
+    const snapshot = getCaptionSnapshot();
+    if (snapshot.length === 0) return;
     const t = Math.round((Date.now() - callStartMs) / 1000);
-    if (currentSpan && currentSpan.who === who) {
-      currentSpan.end = t;
+
+    if (speechSpans.length === 0) {
+      for (const m of snapshot) speechSpans.push({ who: m.who, text: m.text, start: t, end: t });
+      return;
+    }
+
+    // Anchor: find our last utterance inside the snapshot (search from the end)
+    const lastU = speechSpans[speechSpans.length - 1];
+    let anchor = -1;
+    for (let i = snapshot.length - 1; i >= 0; i--) {
+      if (sameUtterance(snapshot[i], lastU)) { anchor = i; break; }
+    }
+
+    if (anchor >= 0) {
+      // Refresh the anchored utterance (ASR may have refined/extended it)
+      if (snapshot[anchor].text.length > lastU.text.length) lastU.text = snapshot[anchor].text;
+      lastU.end = Math.max(lastU.end, t);
+      // Everything after the anchor is new
+      for (let i = anchor + 1; i < snapshot.length; i++) {
+        speechSpans.push({ who: snapshot[i].who, text: snapshot[i].text, start: t, end: t });
+      }
     } else {
-      if (currentSpan) speechSpans.push(currentSpan);
-      currentSpan = { who, start: t, end: t };
+      // No overlap found (burst of new captions between polls) — take the last
+      // message only, to avoid re-appending history we already captured.
+      const m = snapshot[snapshot.length - 1];
+      speechSpans.push({ who: m.who, text: m.text, start: t, end: t });
     }
   }
 
   function flushSpeech() {
-    if (!inCall) return;
-    const toSend = currentSpan ? [...speechSpans, currentSpan] : speechSpans;
-    if (toSend.length === 0 || toSend.length === lastFlushedCount && !currentSpan) return;
+    if (!inCall || speechSpans.length === 0) return;
     lastFlushedCount = speechSpans.length;
-    send('SPEECH', { spans: toSend });
+    send('SPEECH', { spans: speechSpans });
   }
 
   // ── Messaging ───────────────────────────────────────────────
@@ -225,7 +258,7 @@
         callStartMs = Date.now();
         sentParticipants = new Set();
         speechSpans = [];
-        currentSpan = null;
+
         lastFlushedCount = 0;
         captionsEnableAttempts = 0;
         lastEnableAttempt = 0;
@@ -260,6 +293,6 @@
     }
   }, POLL_MS);
 
-  setInterval(sampleActiveSpeaker, SPEECH_POLL_MS);
+  setInterval(sampleCaptions, SPEECH_POLL_MS);
   setInterval(flushSpeech, SPEECH_FLUSH_MS);
 })();
