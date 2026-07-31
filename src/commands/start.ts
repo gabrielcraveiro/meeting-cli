@@ -1023,6 +1023,28 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     let outputTokens = 0;
     let totalTokens = 0;
 
+    // Speaker timeline from Teams live captions (via browser bridge) — ground
+    // truth for WHO spoke WHEN. Injected as context so the organizer can map
+    // "Speaker N" labels to real names deterministically.
+    if (fromBrowser) {
+      const bridge = readBridge();
+      if (bridge?.speech && bridge.speech.length > 0) {
+        const fmt = (s: number) =>
+          `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+        const timeline = bridge.speech
+          .map(sp => `[${fmt(sp.start)}–${fmt(sp.end)}] ${sp.who}`)
+          .join('\n');
+        extraContext.push(
+          `# Timeline de fala (legendas do Teams — fonte AUTORITATIVA de identidade dos speakers)\n`
+          + `Cada linha indica quem estava falando em cada intervalo, com NOME REAL. `
+          + `Use isto para mapear os labels "Speaker N" da transcricao para nomes reais, `
+          + `alinhando pelos timestamps (pode haver um offset constante de alguns segundos entre as duas linhas do tempo).\n\n`
+          + timeline
+        );
+        console.log(chalk.gray(`  🗣 Timeline de fala: ${bridge.speech.length} intervalos (via legendas do Teams)`));
+      }
+    }
+
     // Inject post-meeting context into transcript for richer AI output
     const transcriptForAI = postMeetingContext
       ? `${fullTranscript}\n\n[Contexto do usuario pos-reuniao]: ${postMeetingContext}`

@@ -9,6 +9,12 @@ import path from 'path';
 const BRIDGE_DIR = path.join(os.homedir(), '.config', 'meeting-cli');
 const BRIDGE_PATH = path.join(BRIDGE_DIR, 'browser-bridge.json');
 
+export interface SpeechSpan {
+  who: string;
+  start: number;  // seconds since call start
+  end: number;
+}
+
 export interface BridgeState {
   /** Meeting title reported by the extension (e.g. Teams call title) */
   title?: string;
@@ -16,6 +22,8 @@ export interface BridgeState {
   platform?: string;
   /** Roster scraped from the call UI — includes silent listeners */
   participants: string[];
+  /** Speaker timeline from Teams live captions — ground truth for who spoke when */
+  speech?: SpeechSpan[];
   /** Set to true by the daemon when the extension reports the call ended */
   stopRequested: boolean;
   /** Epoch ms of last write — sessions ignore stale files from crashed daemons */
@@ -51,6 +59,16 @@ export function updateBridgeParticipants(names: string[]): BridgeState {
   const next: BridgeState = { ...current, participants: [...merged], updatedAt: Date.now() };
   writeBridge(next);
   return next;
+}
+
+/** Replace the speech timeline (extension always sends the full span list). */
+export function updateBridgeSpeech(spans: SpeechSpan[]): void {
+  const current = readBridge() ?? { participants: [], stopRequested: false, updatedAt: 0 };
+  const valid = spans.filter(s =>
+    typeof s?.who === 'string' && s.who.length > 0 && s.who.length <= 60 &&
+    Number.isFinite(s.start) && Number.isFinite(s.end)
+  ).slice(0, 5000);
+  writeBridge({ ...current, speech: valid, updatedAt: Date.now() });
 }
 
 export function requestBridgeStop(): void {

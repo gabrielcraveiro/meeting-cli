@@ -50,6 +50,12 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
       return { ok: !!result };
     }
 
+    case 'SPEECH': {
+      if (!msg.spans || msg.spans.length === 0) return { ok: true };
+      const result = await post('/speech', { spans: msg.spans });
+      return { ok: !!result };
+    }
+
     case 'CALL_ENDED': {
       state.inCall = false;
       setBadge('');
