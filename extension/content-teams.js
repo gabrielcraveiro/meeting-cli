@@ -37,6 +37,8 @@
     MORE_BUTTON: "button[data-tid='more-button'], button[id='callingButtons-showMoreBtn']",
     LANGUAGE_SPEECH_MENU: "div[id='LanguageSpeechMenuControl-id']",
     TURN_ON_CAPTIONS: "div[id='closed-captions-button']",
+    // Screen sharing (self) — "stop sharing" only exists while YOU present
+    STOP_SHARING: "[data-tid='stop-sharing-button'], button[data-tid='call-control-stop-sharing'], [data-tid='screen-share-stop-button']",
     // Roster
     ROSTER_ITEM: "[data-tid^='participantsInCall-']",
     ROSTER_NAME: "[id^='roster-avatar-img-']",
@@ -55,6 +57,19 @@
   let lastFlushedCount = 0;
   let captionsEnableAttempts = 0;
   let lastEnableAttempt = 0;
+  let sharingActive = false;
+
+  const SHARING_LABELS = /(stop (sharing|presenting)|parar de (compartilhar|apresentar))/i;
+
+  // True while the LOCAL user is presenting — daemon suppresses notifications
+  // so nothing pops over a shared screen.
+  function isSharing() {
+    if (document.querySelector(SEL.STOP_SHARING)) return true;
+    for (const btn of document.querySelectorAll('button[aria-label]')) {
+      if (SHARING_LABELS.test(btn.getAttribute('aria-label'))) return true;
+    }
+    return false;
+  }
 
   const HANGUP_LABELS = /^(leave|sair|desligar|hang up|raccrocher|auflegen)/i;
 
@@ -270,6 +285,12 @@
         setTimeout(tryEnableCaptions, 4000); // captions → speaker timeline
       } else if (inCall) {
         tryEnableCaptions();
+        const sharing = isSharing();
+        if (sharing !== sharingActive) {
+          sharingActive = sharing;
+          send('SHARING', { active: sharing });
+          console.log('[meeting-cli] compartilhamento de tela:', sharing ? 'INICIADO' : 'encerrado');
+        }
         const current = scrapeParticipants();
         const fresh = current.filter((p) => !sentParticipants.has(p));
         if (fresh.length > 0) {

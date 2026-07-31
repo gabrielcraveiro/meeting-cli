@@ -2,7 +2,8 @@ import http from 'http';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import chalk from 'chalk';
-import { writeBridge, updateBridgeParticipants, updateBridgeSpeech, requestBridgeStop, clearBridge } from '../services/bridge';
+import { writeBridge, updateBridgeParticipants, updateBridgeSpeech, updateBridgeSharing, requestBridgeStop, clearBridge } from '../services/bridge';
+import { notifyWindows } from '../services/notify';
 
 // `meeting daemon` — HTTP bridge for the browser extension.
 // Listens on localhost and spawns `meeting start --browser` when the extension
@@ -42,6 +43,7 @@ export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
     }
 
     console.log(chalk.green(`\n▶ Call detectada${payload.title ? `: ${payload.title}` : ''} — iniciando gravação...\n`));
+    notifyWindows('🎙 Meeting CLI — gravando', payload.title || 'Call detectada no browser');
     child = spawn(process.execPath, args, { stdio: 'inherit' });
     child.on('exit', (code) => {
       child = null;
@@ -108,6 +110,10 @@ export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
           const state = updateBridgeParticipants(payload.participants);
           return json(res, 200, { ok: true, total: state.participants.length }, origin);
         }
+
+        case '/sharing':
+          updateBridgeSharing(payload.active === true);
+          return json(res, 200, { ok: true }, origin);
 
         case '/speech':
           if (!Array.isArray(payload.spans)) {

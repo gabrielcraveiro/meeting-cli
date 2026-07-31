@@ -15,6 +15,7 @@ import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/temp
 import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
 import { matchSpeaker, enrollSpeaker } from '../services/voice';
 import { readBridge } from '../services/bridge';
+import { notifyWindows } from '../services/notify';
 
 const DEEPGRAM_PER_MIN = 0.0077;  // nova-3 + diarization, single-pass
 const SEGMENT_SECONDS = 45;
@@ -1171,6 +1172,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       meetingType: templateName,
     });
     s.success({ text: path.basename(notePath) });
+
+    notifyWindows(
+      '✅ Nota pronta' + (meetingTitle ? `: ${meetingTitle}` : ''),
+      `${formatTime(Math.round(durationSec))} · ${participants.length > 0 ? participants.slice(0, 4).join(', ') : path.basename(notePath)}`
+    );
 
     cleanup(segmentsDir);
 

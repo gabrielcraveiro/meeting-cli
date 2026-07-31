@@ -34,7 +34,7 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
   switch (msg.type) {
     case 'CALL_STARTED': {
       state.inCall = true;
-      setBadge('REC', '#d32f2f');
+      setBadge('ON', '#546e7a');  // discreet — no red REC screaming on screen shares
       const result = await post('/start', {
         title: msg.title,
         platform: msg.platform,
@@ -47,6 +47,11 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
     case 'PARTICIPANTS': {
       if (!msg.participants || msg.participants.length === 0) return { ok: true };
       const result = await post('/participants', { participants: msg.participants });
+      return { ok: !!result };
+    }
+
+    case 'SHARING': {
+      const result = await post('/sharing', { active: !!msg.active });
       return { ok: !!result };
     }
 

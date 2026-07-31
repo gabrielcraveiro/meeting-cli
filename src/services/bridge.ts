@@ -26,6 +26,8 @@ export interface BridgeState {
   participants: string[];
   /** Speaker timeline from Teams live captions — ground truth for who spoke when */
   speech?: SpeechSpan[];
+  /** True while the local user is screen-sharing — suppresses notifications */
+  sharing?: boolean;
   /** Set to true by the daemon when the extension reports the call ended */
   stopRequested: boolean;
   /** Epoch ms of last write — sessions ignore stale files from crashed daemons */
@@ -76,6 +78,11 @@ export function updateBridgeSpeech(spans: SpeechSpan[]): void {
     text: typeof s.text === 'string' ? s.text.slice(0, 500) : undefined,
   }));
   writeBridge({ ...current, speech: valid, updatedAt: Date.now() });
+}
+
+export function updateBridgeSharing(active: boolean): void {
+  const current = readBridge() ?? { participants: [], stopRequested: false, updatedAt: 0 };
+  writeBridge({ ...current, sharing: active, updatedAt: Date.now() });
 }
 
 export function requestBridgeStop(): void {
