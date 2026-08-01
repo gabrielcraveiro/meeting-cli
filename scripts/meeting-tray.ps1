@@ -33,14 +33,18 @@ $tray.Icon = $iconOffline
 $tray.Text = 'Meeting CLI — daemon offline'
 $tray.Visible = $true
 
+# Caminho absoluto — `meeting` vive no bin do fnm, que só entra no PATH do fish;
+# bash de login via wsl.exe não o enxerga.
+$meetingBin = '/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/meeting'
+
 function Start-Daemon {
     # Abre o daemon num terminal DE VERDADE — a TUI (chat ao vivo, insights)
     # continua funcionando; o tray só faz o clique por você.
     $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
     if ($wt) {
-        Start-Process wt.exe -ArgumentList 'wsl.exe', '-e', 'bash', '-lic', 'meeting daemon'
+        Start-Process wt.exe -ArgumentList 'wsl.exe', '-e', $meetingBin, 'daemon'
     } else {
-        Start-Process wsl.exe -ArgumentList '-e', 'bash', '-lic', 'meeting daemon'
+        Start-Process wsl.exe -ArgumentList '-e', $meetingBin, 'daemon'
     }
 }
 
