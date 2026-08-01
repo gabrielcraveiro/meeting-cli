@@ -33,9 +33,22 @@ $tray.Icon = $iconOffline
 $tray.Text = 'Meeting CLI — daemon offline'
 $tray.Visible = $true
 
+function Start-Daemon {
+    # Abre o daemon num terminal DE VERDADE — a TUI (chat ao vivo, insights)
+    # continua funcionando; o tray só faz o clique por você.
+    $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+    if ($wt) {
+        Start-Process wt.exe -ArgumentList 'wsl.exe', '-e', 'bash', '-lic', 'meeting daemon'
+    } else {
+        Start-Process wsl.exe -ArgumentList '-e', 'bash', '-lic', 'meeting daemon'
+    }
+}
+
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $statusItem = $menu.Items.Add('daemon offline'); $statusItem.Enabled = $false
 $menu.Items.Add('-') | Out-Null
+$startItem = $menu.Items.Add('Iniciar daemon (abre terminal)')
+$startItem.Add_Click({ Start-Daemon })
 $stopItem = $menu.Items.Add('Parar gravação')
 $stopItem.Add_Click({
     try { Invoke-RestMethod -Method Post -Uri "$daemonUrl/stop" -TimeoutSec 3 | Out-Null } catch {}
@@ -63,11 +76,13 @@ $timer.Add_Tick({
             $statusItem.Text = 'Ocioso — aguardando call'
             $stopItem.Enabled = $false
         }
+        $startItem.Enabled = $false
     } catch {
         $tray.Icon = $iconOffline
         $tray.Text = 'Meeting CLI — daemon offline'
-        $statusItem.Text = 'daemon offline (rode: meeting daemon)'
+        $statusItem.Text = 'daemon offline — clique em Iniciar daemon'
         $stopItem.Enabled = $false
+        $startItem.Enabled = $true
     }
 })
 $timer.Start()
