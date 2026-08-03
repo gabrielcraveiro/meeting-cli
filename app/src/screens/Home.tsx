@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BriefingCard } from '../components/BriefingCard';
 import { ErrorBanner } from '../components/ErrorBanner';
-import { DocIcon, GearIcon, PlusIcon } from '../components/Icons';
+import { DocIcon, PlusIcon, TerminalIcon } from '../components/Icons';
 import { api, friendlyError, type Meeting, type NoteSummary, type Status } from '../lib/api';
 import { hhmm, participantsLabel, relativeDay } from '../lib/format';
+import type { DaemonLauncher } from '../hooks/useDaemonLauncher';
 
 type Props = {
   status: Status | null;
   offline: boolean;
+  launcher: DaemonLauncher;
   onOpenNote: (note: NoteSummary) => void;
   onEnterSession: () => void;
+  onOpenDaemon: () => void;
 };
 
-export function Home({ status, offline, onOpenNote, onEnterSession }: Props) {
+export function Home({
+  status,
+  offline,
+  launcher,
+  onOpenNote,
+  onEnterSession,
+  onOpenDaemon,
+}: Props) {
   const [meetings, setMeetings] = useState<Meeting[] | null>(null);
   const [notes, setNotes] = useState<NoteSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +68,16 @@ export function Home({ status, offline, onOpenNote, onEnterSession }: Props) {
     <div className="screen home">
       <BriefingCard />
 
-      {offline && <ErrorBanner message="Daemon offline — abra o Meeting Daemon." onRetry={load} />}
+      {offline &&
+        (launcher.starting ? (
+          <ErrorBanner message="Iniciando daemon…" />
+        ) : (
+          <ErrorBanner
+            message={launcher.error ?? 'Daemon offline — nada de agenda nem notas.'}
+            actionLabel="Iniciar daemon"
+            onAction={() => void launcher.start()}
+          />
+        ))}
       {!offline && error && <ErrorBanner message={error} onRetry={load} />}
 
       <section className="group">
@@ -124,8 +143,13 @@ export function Home({ status, offline, onOpenNote, onEnterSession }: Props) {
           <PlusIcon />
           {starting ? 'Iniciando…' : 'Nota manual'}
         </button>
-        <button className="btn-ghost" title="Ajustes (em breve)" aria-label="Ajustes" disabled>
-          <GearIcon />
+        <button
+          className="btn-ghost"
+          title="Daemon e log"
+          aria-label="Daemon"
+          onClick={onOpenDaemon}
+        >
+          <TerminalIcon />
         </button>
       </footer>
     </div>

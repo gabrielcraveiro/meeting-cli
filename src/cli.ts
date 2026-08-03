@@ -70,12 +70,14 @@ program
   .description('Inicia gravação de reunião com transcrição ao vivo')
   .option('-t, --template <name>', 'Template de reunião (daily, 1on1, retro, planning, technical)')
   .option('--browser', 'Sessão iniciada pela extensão do browser (usa bridge para roster/stop)')
+  .option('--headless', 'Sem TUI e sem prompts (controlado pelo app; contexto final vem via daemon)')
   .action(cmdStart);
 
 program
   .command('daemon')
   .description('Escuta a extensão do browser e grava automaticamente ao entrar em calls')
   .option('-p, --port <port>', 'Porta HTTP local', '7899')
+  .option('--headless', 'Sessões sem TUI: output do filho capturado em /daemon/logs (app desktop)')
   .action(cmdDaemon);
 
 program

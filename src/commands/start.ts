@@ -25,6 +25,8 @@ const SEGMENT_SECONDS = 45;
 const WARN_SECONDS = 30 * 60;
 const HARD_STOP_SECONDS = 60 * 60;
 const INSIGHT_INTERVAL_MS = 3 * 60 * 1000;
+// Headless: janela em que o app pode enviar o contexto pós-reunião (POST /session/context)
+const APP_CONTEXT_WAIT_MS = 45_000;
 
 // Silence detection: auto-stop after sustained silence
 const SILENCE_THRESHOLD_DB = -35;           // dB — below this = silence
@@ -99,6 +101,63 @@ function mergeWavSegments(segmentPaths: string[], outputPath: string): void {
 // ── TUI Adapter ──
 // Wraps the new MVU-based TUI with the legacy API so existing call sites stay unchanged.
 // Phase 5: all rendering, input handling, and overlays are delegated to src/tui/.
+
+/** Superfície de UI consumida pela sessão — TerminalUI (TUI) ou HeadlessUI (app). */
+interface SessionUI {
+  init(): void;
+  setLabels(template: string, topic: string): void;
+  setPaused(paused: boolean): void;
+  drawStatusBar(time: string, segments: number, extra?: string): void;
+  updateCost(cost: number): void;
+  showStatus(time: string, segments: number): void;
+  drawInputBar(hint?: string): void;
+  setInput(text: string): void;
+  updateTranscript(line: string): void;
+  renameSpeaker(from: string, to: string): void;
+  appendLine(text: string): void;
+  appendInsightLine(raw: string, styler: (s: string) => string, prefix: string): void;
+  appendChatUser(text: string): void;
+  appendChatAI(text: string): void;
+  teardown(): void;
+  readonly raw: {
+    onSubmit(handler: (text: string) => void): void;
+    onSignal(handler: (signal: 'stop' | 'interrupt') => void): void;
+  };
+}
+
+// ── Headless UI ──
+// Modo --headless: sem TUI, sem raw stdin, sem cursor. Tudo que a sessão "mostraria"
+// vira linha de stdout — o daemon captura (strip de ANSI) e serve em /daemon/logs.
+// Nenhum handler de input é registrado: quem controla a sessão é o app via daemon.
+class HeadlessUI implements SessionUI {
+  init() {}
+  setLabels(template: string, topic: string) {
+    const bits = [topic, template].filter(Boolean).join(' · ');
+    if (bits) console.log(`  ${bits}`);
+  }
+  setPaused(paused: boolean) { console.log(paused ? '  ⏸ pausado' : '  ▶ retomado'); }
+  // Elapsed/segmentos/custo o app lê via /status — nada a imprimir aqui.
+  drawStatusBar(_time: string, _segments: number, _extra?: string) {}
+  updateCost(_cost: number) {}
+  showStatus(_time: string, _segments: number) {}
+  drawInputBar(_hint?: string) {}
+  setInput(_text: string) {}
+  updateTranscript(_line: string) {}   // transcrição vai pro app via sessionReporter
+  renameSpeaker(_from: string, _to: string) {}
+  appendLine(text: string) { console.log(text); }
+  appendInsightLine(raw: string, _styler: (s: string) => string, prefix: string) {
+    console.log(prefix + raw);
+  }
+  appendChatUser(text: string) { console.log(text); }
+  appendChatAI(text: string) { console.log(text); }
+  teardown() {}
+  get raw() {
+    return {
+      onSubmit(_handler: (text: string) => void) {},   // sem stdin em headless
+      onSignal(_handler: (signal: 'stop' | 'interrupt') => void) {},
+    };
+  }
+}
 
 class TerminalUI {
   private tui = createTUI({ transcriptLines: 3 });
@@ -301,7 +360,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-export async function cmdStart(topicArg?: string, opts: { template?: string; browser?: boolean } = {}): Promise<void> {
+export async function cmdStart(topicArg?: string, opts: { template?: string; browser?: boolean; headless?: boolean } = {}): Promise<void> {
   const config = requireConfig();
   // Each meeting starts fresh — Speaker 0 from last meeting is likely a different person
   config.speakerNames = {};
@@ -312,6 +371,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   // Browser-bridge session: title/participants come from the extension via daemon,
   // so the interactive calendar picker is skipped (no one is at the terminal).
   const fromBrowser = opts.browser === true;
+  // Headless: nenhum humano no terminal. Sem TUI, sem readline em lugar nenhum —
+  // o contexto pós-reunião chega pelo app (POST /session/context → fila do daemon).
+  const headless = opts.headless === true;
   if (fromBrowser) {
     // Live reporting to the daemon (desktop app) — only in browser-driven sessions
     enableReporting();
@@ -323,7 +385,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   }
 
   // Calendar picker: show upcoming meetings if ICS is configured and no topic given
-  if (config.icsUrl && !topic && !fromBrowser) {
+  if (config.icsUrl && !topic && !fromBrowser && !headless) {
     let meetings: Awaited<ReturnType<typeof getUpcomingMeetings>> = [];
     try {
       meetings = await getUpcomingMeetings(config.icsUrl);
@@ -437,6 +499,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   let daemonQueueBusy = false;
   // Anotações feitas pelo usuário no app durante a reunião — esqueleto da nota final
   const userNotes: Array<{ ts: number; text: string }> = [];
+  // Contexto pós-reunião enviado pelo app (POST /session/context) — em headless
+  // substitui o prompt "Contexto extra para a nota?".
+  let appContext = '';
   let consecutiveSilentSegments = 0;
   let micDeadSegments = 0;
   let micWarned = false;
@@ -455,7 +520,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   let pauseStartTime = 0;   // Date.now() when pause started
   const pausedSegments = new Set<string>();  // segments captured during pause (skip transcription)
 
-  const ui = new TerminalUI();
+  const ui: SessionUI = headless ? new HeadlessUI() : new TerminalUI();
   const chatHistory: Array<{ role: string; content: string }> = [];
 
   // Context system: auto-loaded + user-added via /ctx + topic-based
@@ -741,6 +806,41 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     return { kept: files, trimmed: trimCount };
   }
 
+  // Headless substitute for the "Contexto extra para a nota?" prompt: the poll timer
+  // is already cleared at this point, so we long-poll the daemon queue directly until
+  // a `context` item shows up or the deadline expires. Notes that arrive meanwhile
+  // still count for the final enhance; late chat questions get a short answer.
+  async function waitForAppContext(windowMs: number): Promise<string> {
+    if (appContext) return appContext;
+    if (!fromBrowser) return '';
+    const deadline = Date.now() + windowMs;
+    console.log(chalk.gray(`  Aguardando contexto extra do app (até ${Math.round(windowMs / 1000)}s)...`));
+    while (Date.now() < deadline) {
+      const remaining = deadline - Date.now();
+      const iterStart = Date.now();
+      const items = await fetchQueue(Math.min(remaining, 10_000));
+      // Daemon offline (fetch falha na hora): não vira busy-loop.
+      if (items.length === 0 && Date.now() - iterStart < 500) {
+        await new Promise<void>(r => setTimeout(r, 500));
+      }
+      let contextAnswered = false;
+      for (const item of items) {
+        if (item.type === 'context') {
+          // Empty text is a deliberate "no context" — closes the window early
+          appContext = item.text.trim();
+          contextAnswered = true;
+        } else if (item.type === 'note') {
+          userNotes.push({ ts: item.ts, text: item.text });
+        } else if (item.type === 'chat') {
+          reportChatReply(item.id, 'A reunião está sendo finalizada — a nota estará disponível em instantes.');
+        }
+      }
+      if (contextAnswered) return appContext;
+      if (items.length === 0 && Date.now() >= deadline) break;
+    }
+    return appContext;
+  }
+
   async function finalize(durationSec: number) {
     if (stopping) return;
     stopping = true;
@@ -957,10 +1057,14 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     // Phase 2: Manual wizard for remaining unknown speakers
     const stillUnknown = unknownLabels.filter(u => !voiceMatched.has(u.label));
 
+    // Headless: NENHUM readline é criado (não há stdin) — o wizard de speakers é
+    // pulado e o contexto extra vem do app.
     let wizardRl: readline.Interface | null = null;
-    try {
-      wizardRl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    } catch {}
+    if (!headless) {
+      try {
+        wizardRl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      } catch {}
+    }
 
     if (wizardRl && stillUnknown.length > 0) {
       // Build ordered list of attendees not yet identified — used as numbered shortcuts
@@ -1025,7 +1129,16 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
 
     // Post-meeting context: ask for optional extra context to enrich the note
     let postMeetingContext = '';
-    if (wizardRl) {
+    if (headless) {
+      // Sem terminal: o app tem uma janela de 45s para POST /session/context.
+      const fromApp = await waitForAppContext(APP_CONTEXT_WAIT_MS);
+      if (fromApp) {
+        postMeetingContext = fromApp;
+        console.log(chalk.green('  + Contexto extra recebido do app'));
+      } else {
+        console.log(chalk.gray('  Sem contexto extra do app (janela de 45s) — seguindo.'));
+      }
+    } else if (wizardRl) {
       console.log('');
       const ctx = await new Promise<string>((resolve) => {
         wizardRl!.question(chalk.magenta('  Contexto extra para a nota? ') + chalk.gray('(Enter para pular): '), (answer: string) => {
@@ -1490,6 +1603,12 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
           if (item.type === 'note') {
             userNotes.push({ ts: item.ts, text: item.text });
             ui.appendLine(chalk.cyan(`  📝 ${item.text}`));
+            continue;
+          }
+          if (item.type === 'context') {
+            // Pode chegar antes do finalize (usuário pré-digitou) — guardamos.
+            appContext = item.text.trim();
+            ui.appendLine(chalk.magenta('  + Contexto extra recebido do app'));
             continue;
           }
           // Chat do app: mesmo caminho do chat do TUI (buildSystemMsg + chatWithMeetings)

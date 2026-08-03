@@ -9,7 +9,8 @@ export interface ReportedLine { ts: number; speaker: string; text: string }
 
 export type QueueItem =
   | { type: 'chat'; id: string; message: string }
-  | { type: 'note'; ts: number; text: string };
+  | { type: 'note'; ts: number; text: string }
+  | { type: 'context'; text: string };
 
 const PORT = parseInt(process.env.MEETING_DAEMON_PORT || '') || 7899;
 const BASE = `http://127.0.0.1:${PORT}`;

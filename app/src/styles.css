@@ -741,6 +741,327 @@ button:disabled {
   color: var(--sage-deep);
 }
 
+/* ---------------------------------------------------------------- daemon */
+
+.daemon {
+  overflow: hidden;
+}
+
+.daemon-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 12px;
+}
+
+.daemon-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.daemon-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.daemon-port {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-state {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.dot-state {
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--line-strong);
+}
+
+.state-on .dot-state {
+  background: var(--sage);
+}
+
+.state-live .dot-state {
+  background: var(--sage);
+  animation: pulse 1.9s ease-out infinite;
+}
+
+.state-off .dot-state {
+  background: #c9a08f;
+}
+
+.state-on,
+.state-live {
+  color: var(--sage-deep);
+  border-color: var(--sage-wash-deep);
+  background: var(--sage-wash);
+}
+
+.daemon-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.daemon-hint {
+  font-size: 12.5px;
+}
+
+.daemon-error {
+  margin: 0 14px 10px;
+  font-size: 12px;
+  color: #a4503c;
+}
+
+.btn-danger {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  border-radius: var(--r-md);
+  border: 1px solid #eccfc6;
+  background: #fbf1ee;
+  color: #a4503c;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 120ms ease;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #f6e6e2;
+}
+
+/* log ao vivo */
+
+.logbox {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--cream-deep);
+  overflow: hidden;
+}
+
+.logbox-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.logbox-mode {
+  margin-left: auto;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-weight: 400;
+}
+
+.logbox-head .conn {
+  margin-left: auto;
+}
+
+/* quando o badge "poll 3s" aparece, ele já empurra tudo pra direita */
+.logbox-mode ~ .conn {
+  margin-left: 0;
+}
+
+.logbox-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 14px;
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.logline {
+  margin: 0 0 2px;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.logline-at {
+  margin-right: 7px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------- contexto pós-reunião (45s) */
+
+.ctx {
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--sage-wash-deep);
+  box-shadow: var(--shadow-lift);
+  animation: rise 220ms ease both;
+}
+
+.ctx-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.ctx-label {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--serif);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.ctx-clock {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  color: var(--sage-deep);
+}
+
+.ctx-bar {
+  height: 3px;
+  border-radius: 99px;
+  background: var(--cream-deep);
+  overflow: hidden;
+  margin-bottom: 9px;
+}
+
+.ctx-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--sage);
+  transition: width 900ms linear;
+}
+
+.ctx-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ctx-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  outline: none;
+  background: var(--surface-sunken);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.ctx-input:focus {
+  border-color: var(--sage-wash-deep);
+  background: var(--surface);
+}
+
+.ctx-input::placeholder {
+  color: var(--ink-faint);
+}
+
+.btn-ctx-send {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  color: var(--cream);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background 120ms ease;
+}
+
+.btn-ctx-send:hover:not(:disabled) {
+  background: #3a3730;
+}
+
+.btn-ctx-skip {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  color: var(--ink-mute);
+  font-size: 12.5px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.btn-ctx-skip:hover:not(:disabled) {
+  background: var(--cream-deep);
+  color: var(--ink);
+}
+
+.ctx-wait {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.ctx-note {
+  flex: 1 0 100%;
+  font-size: 11.5px;
+  color: var(--ink-mute);
+}
+
+.spinner {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border-radius: 99px;
+  border: 1.6px solid var(--sage-wash-deep);
+  border-top-color: var(--sage);
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ---------------------------------------------------------------- leitura */
 
 .reader {

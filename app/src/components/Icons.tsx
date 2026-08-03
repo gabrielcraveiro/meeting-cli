@@ -40,7 +40,14 @@ export const GearIcon = ({ size = 16, className }: P) => (
   </svg>
 );
 
-export const WaveIcon = ({ size = 18, className }: P) => (
+export const TerminalIcon = ({ size = 16, className }: P) => (
+  <svg {...base(size)} className={className} aria-hidden>
+    <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+    <path d="M7.5 10l2.5 2-2.5 2M12.5 14.5h4" />
+  </svg>
+);
+
+export const WaveIcon =({ size = 18, className }: P) => (
   <svg {...base(size)} className={className} aria-hidden>
     <path d="M3 12h2M8 12h.01M8 8.5v7M12 5.5v13M16 8.5v7M20 10.5v3" />
   </svg>

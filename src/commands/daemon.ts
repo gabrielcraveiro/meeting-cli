@@ -23,6 +23,9 @@ const SSE_HEARTBEAT_MS = 15_000;
 const CHAT_TIMEOUT_MS = 60_000;
 const QUEUE_POLL_TIMEOUT_MS = 25_000;
 const MEETINGS_CACHE_MS = 5 * 60 * 1000;
+const LOG_BUFFER_MAX = 500;
+/** SGR/CSI sequences — logs go to the app as plain text. */
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 interface StartPayload {
   title?: string;
@@ -40,7 +43,10 @@ interface Stamped { ts: number; text: string }
 /** Item awaiting delivery to the recording session via /internal/chat-queue. */
 type QueueItem =
   | { type: 'chat'; id: string; message: string }
-  | { type: 'note'; ts: number; text: string };
+  | { type: 'note'; ts: number; text: string }
+  | { type: 'context'; text: string };
+
+interface LogLine { line: string; at: number }
 
 interface SessionState {
   title?: string;
@@ -68,9 +74,45 @@ function emptySession(title?: string): SessionState {
   };
 }
 
-export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
+export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}): Promise<void> {
   const port = parseInt(opts.port || '') || DEFAULT_PORT;
+  const headless = opts.headless === true;
   let child: ChildProcess | null = null;
+
+  // Daemon log tail — lives OUTSIDE the session state (survives resetSession) so the
+  // app can attach at any moment and see what the daemon/session has been doing.
+  const daemonLogs: LogLine[] = [];
+  const sseLogs = new Set<http.ServerResponse>();
+
+  function pushLog(raw: string): void {
+    const line = raw.replace(ANSI_RE, '').replace(/\r$/, '');
+    const entry: LogLine = { line, at: Date.now() };
+    daemonLogs.push(entry);
+    if (daemonLogs.length > LOG_BUFFER_MAX) daemonLogs.splice(0, daemonLogs.length - LOG_BUFFER_MAX);
+    broadcast(sseLogs, sseEvent('log', entry));
+  }
+
+  /** console.log + tail buffer + SSE. Use instead of console.log inside the daemon. */
+  function logLine(msg: string): void {
+    console.log(msg);
+    for (const l of String(msg).split('\n')) pushLog(l);
+  }
+
+  /** Feed a child stdout/stderr chunk stream into the tail buffer, line by line. */
+  function pipeChildLogs(stream: NodeJS.ReadableStream | null | undefined): void {
+    if (!stream) return;
+    let pending = '';
+    stream.setEncoding('utf-8');
+    stream.on('data', (chunk: string) => {
+      pending += chunk;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const l of lines) pushLog(l);
+      if (pending.length > 8192) { pushLog(pending); pending = ''; }
+    });
+    stream.on('end', () => { if (pending.trim()) pushLog(pending); pending = ''; });
+    stream.on('error', () => {});
+  }
 
   const cliPath = path.resolve(process.argv[1]);
 
@@ -126,19 +168,26 @@ export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
     if (payload.template && /^[a-z0-9_-]+$/i.test(payload.template)) {
       args.push('--template', payload.template);
     }
+    // Headless daemon: the session has no terminal — no TUI, no prompts, and its
+    // output is captured here instead of being written to this terminal.
+    if (headless) args.push('--headless');
 
-    console.log(chalk.green(`\n▶ Call detectada${payload.title ? `: ${payload.title}` : ''} — iniciando gravação...\n`));
+    logLine(chalk.green(`\n▶ Call detectada${payload.title ? `: ${payload.title}` : ''} — iniciando gravação...\n`));
     notifyWindows('🎙 Meeting CLI — gravando', payload.title || 'Call detectada no browser');
     child = spawn(process.execPath, args, {
-      stdio: 'inherit',
+      stdio: headless ? ['ignore', 'pipe', 'pipe'] : 'inherit',
       // The session reports back to this very daemon — tell it where to POST.
       env: { ...process.env, MEETING_DAEMON_PORT: String(port) },
     });
+    if (headless) {
+      pipeChildLogs(child.stdout);
+      pipeChildLogs(child.stderr);
+    }
     child.on('exit', (code) => {
       child = null;
       clearBridge();
       resetSession();
-      console.log(chalk.gray(`\n  Sessão finalizada (exit ${code ?? 0}). Aguardando próxima call...\n`));
+      logLine(chalk.gray(`\n  Sessão finalizada (exit ${code ?? 0}). Aguardando próxima call...\n`));
     });
   }
 
@@ -308,7 +357,7 @@ export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
     const origin = req.headers.origin;
 
     if (!isAllowedOrigin(origin)) {
-      console.log(chalk.yellow(`  ⚠ Requisição rejeitada de origem não confiável: ${origin}`));
+      logLine(chalk.yellow(`  ⚠ Requisição rejeitada de origem não confiável: ${origin}`));
       return json(res, 403, { error: 'forbidden origin' });
     }
 
@@ -396,6 +445,13 @@ export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
         if (!child) return json(res, 409, { error: 'não gravando' }, origin);
         return json(res, 200, { notes: session.userNotes }, origin);
 
+      // Logs do daemon + da sessão (headless) — disponíveis mesmo fora de sessão.
+      case '/daemon/logs':
+        return json(res, 200, { lines: daemonLogs }, origin);
+
+      case '/daemon/logs/stream':
+        return openSse(res, sseLogs, origin, () => sseEvent('snapshot', { lines: daemonLogs }));
+
       default:
         return json(res, 404, { error: 'not found' }, origin);
     }
@@ -440,6 +496,21 @@ export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
         session.userNotes.push({ ts, text });
         enqueue({ type: 'note', ts, text });  // session keeps it for the final enhance
         return json(res, 200, { ok: true, ts }, origin);
+      }
+
+      // Contexto pós-reunião vindo do app — substitui o prompt "Contexto extra
+      // para a nota?" quando a sessão roda headless. Aceito durante a gravação
+      // (pré-digitado) e durante o finalizing (janela de 45s da sessão).
+      case '/session/context': {
+        if (!child || (session.phase !== 'recording' && session.phase !== 'finalizing')) {
+          return json(res, 409, { error: 'sem sessão ativa para receber contexto' }, origin);
+        }
+        if (typeof payload.text !== 'string') {
+          return json(res, 400, { error: 'text obrigatório (string; vazia = "sem contexto, prossiga")' }, origin);
+        }
+        // Empty string is a valid answer: "no context" — ends the 45s finalize window early.
+        enqueue({ type: 'context', text: payload.text.trim().slice(0, 8000) });
+        return json(res, 200, { ok: true }, origin);
       }
 
       case '/session/chat': {
@@ -554,16 +625,17 @@ export async function cmdDaemon(opts: { port?: string } = {}): Promise<void> {
   clearBridge();  // stale file from a crashed daemon would confuse the next session
 
   server.listen(port, '127.0.0.1', () => {
-    console.log(chalk.bold('\n  Meeting Daemon') + chalk.gray(` — escutando em http://127.0.0.1:${port}`));
-    console.log(chalk.gray('  Aguardando a extensão do browser sinalizar entrada em uma call...'));
-    console.log(chalk.gray('  Ctrl+C para encerrar.\n'));
+    logLine(chalk.bold('\n  Meeting Daemon') + chalk.gray(` — escutando em http://127.0.0.1:${port}`)
+      + (headless ? chalk.gray(' (headless)') : ''));
+    logLine(chalk.gray('  Aguardando a extensão do browser sinalizar entrada em uma call...'));
+    logLine(chalk.gray('  Ctrl+C para encerrar.\n'));
   });
 
   process.on('SIGINT', () => {
     if (child) {
       // Let the recording session handle its own shutdown; just stop accepting new calls
       requestBridgeStop();
-      console.log(chalk.yellow('\n  Sinalizando parada para a sessão ativa...'));
+      logLine(chalk.yellow('\n  Sinalizando parada para a sessão ativa...'));
       setTimeout(() => process.exit(0), 5000);
     } else {
       clearBridge();

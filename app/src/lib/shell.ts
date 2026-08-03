@@ -15,3 +15,11 @@ export async function openObsidian(file: string, vault?: string): Promise<void> 
 export async function openHttps(url: string): Promise<void> {
   await invoke('open_https', { url });
 }
+
+/**
+ * Sobe o daemon em modo headless (sem terminal). Não espera o daemon ficar de
+ * pé — quem chama faz o retry de `/status` (ver `useDaemonLauncher`).
+ */
+export async function startDaemonHeadless(): Promise<void> {
+  await invoke('start_daemon_headless');
+}

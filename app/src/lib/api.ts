@@ -137,6 +137,11 @@ export type NoteSummary = {
 };
 
 export type TranscriptLine = { ts: number; speaker: string; text: string };
+/**
+ * Linha de log do daemon (`/daemon/logs`). `at` é epoch ms no contrato atual —
+ * aceitamos string também para não quebrar se virar ISO.
+ */
+export type LogLine = { line: string; at?: number | string };
 export type Insight = { ts: number; text: string };
 export type SessionNote = { ts: number; text: string };
 
@@ -174,6 +179,16 @@ export const api = {
     }),
 
   sessionNotes: () => request<{ notes: SessionNote[] }>('/session/notes'),
+
+  /** Contexto extra pós-reunião (janela de ~45s). 409 = janela perdida. */
+  sessionContext: (text: string) =>
+    request<unknown>('/session/context', {
+      method: 'POST',
+      body: { text },
+      timeoutMs: 10000,
+    }),
+
+  daemonLogs: () => request<{ lines: LogLine[] }>('/daemon/logs', { timeoutMs: 6000 }),
 
   chat: (message: string) =>
     request<{ reply: string }>('/session/chat', {

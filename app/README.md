@@ -50,8 +50,14 @@ npm run build        # tsc --noEmit + vite build
   janela. O ícone do tray vem do `default_window_icon()` — o bloco
   `app.trayIcon` do `tauri.conf.json` foi **deixado de fora de propósito**,
   senão apareceriam dois ícones na bandeja (um do config, um do Rust).
-- *Iniciar daemon* roda `cmd /C start "Meeting Daemon" cmd /K meeting daemon`,
-  ou seja abre um terminal de verdade — o chat da TUI depende disso.
+- *Iniciar daemon* (tray **e** app) roda o daemon **headless, sem terminal**:
+  `wsl.exe -e <caminho absoluto>/meeting daemon --headless` com
+  `CREATE_NO_WINDOW` e stdio em `null`. Não existe mais TUI para depender de
+  terminal — o log ao vivo agora é a tela *Daemon* (`/daemon/logs`).
+- **Autostart.** Na primeira vez que o app detecta o daemon offline depois de
+  abrir, ele tenta subir sozinho UMA vez (flag em `sessionStorage`) e sonda
+  `/status` por até 20s. Se falhar, o banner da Home mostra o botão manual
+  *Iniciar daemon* (`useDaemonLauncher`).
 
 ## Pontos de risco — validar no Windows
 
@@ -110,6 +116,19 @@ probabilidade de dar problema:
   reload). Um `Set` de linhas já enviadas evita duplicata quando se edita o
   meio do texto; ao sair do campo ou parar a gravação, tudo que sobrou é
   enviado.
+- **Tela Daemon** (botão de terminal no rodapé da Home): estado + porta, botão
+  *Iniciar daemon* quando offline, *Parar gravação* quando gravando (não existe
+  reiniciar — o daemon não expõe kill) e log ao vivo por SSE
+  `/daemon/logs/stream`, com fallback para poll de `GET /daemon/logs` a cada 3s
+  se o SSE nunca abrir. Máximo de 500 linhas no DOM, autoscroll só quando o
+  usuário está colado no fim.
+- **Contexto pós-reunião**: com `phase === 'finalizing'`, a barra de chat da
+  sessão dá lugar a um campo destacado com countdown de 45s → `POST
+  /session/context`. O botão *Pular* manda `text: ""` (resposta válida no
+  contrato = "sem contexto, prossiga"), encerrando a janela na hora em vez de
+  esperar os 45s. Depois de enviar/pular (ou expirar) fica "Finalizando nota…" até
+  `phase` voltar a `idle`, quando o app volta pra Home e recarrega os recentes.
+  409 = janela perdida, avisado discretamente.
 - **Chat e insights** viram cartões dispensáveis acima da barra. Pergunta
   pendente aparece como "Pensando…" e é substituída pela resposta (timeout de
   60s, já que o contrato avisa 5–15s).
@@ -139,10 +158,10 @@ app/
 ├─ scripts/gen-icons.mjs        # gera os PNG/ICO do bundle
 ├─ src/
 │  ├─ main.tsx  App.tsx  styles.css
-│  ├─ hooks/useStatus.ts        # poll de /status a cada 3s
+│  ├─ hooks/  useStatus.ts (poll de /status 3s)  useDaemonLauncher.ts
 │  ├─ lib/  api.ts sse.ts markdown.ts format.ts shell.ts
-│  ├─ components/  TitleBar BriefingCard TranscriptPanel Markdown ErrorBanner Icons
-│  └─ screens/  Home.tsx NoteSession.tsx NoteReader.tsx
+│  ├─ components/  TitleBar BriefingCard TranscriptPanel DaemonLog Markdown ErrorBanner Icons
+│  └─ screens/  Home.tsx NoteSession.tsx NoteReader.tsx DaemonScreen.tsx
 └─ src-tauri/
    ├─ Cargo.toml  build.rs  tauri.conf.json
    ├─ capabilities/default.json
@@ -153,5 +172,5 @@ app/
 ## Fora de escopo nesta entrega
 
 - Lupinha nota → transcript (fase 3 da spec).
-- Tela de ajustes (a engrenagem está desabilitada).
+- Tela de ajustes (o botão do rodapé agora abre a tela *Daemon*).
 - Toggle "Original / Enhanced" na nota final.

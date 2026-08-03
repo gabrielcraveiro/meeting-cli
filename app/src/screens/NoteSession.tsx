@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CloseIcon, SendIcon, StopIcon, WaveIcon } from '../components/Icons';
 import { Markdown } from '../components/Markdown';
 import { TranscriptPanel } from '../components/TranscriptPanel';
-import { api, friendlyError, type Insight, type Status } from '../lib/api';
+import { ApiError, api, friendlyError, type Insight, type Status } from '../lib/api';
 import { mmss } from '../lib/format';
 import { subscribeSse } from '../lib/sse';
 
@@ -17,6 +17,8 @@ type Props = {
 };
 
 const DRAFT_KEY = 'meeting.notepad.draft';
+/** janela do daemon para receber contexto extra depois do stop */
+const CONTEXT_WINDOW_SEC = 45;
 
 export function NoteSession({ status, onStopped }: Props) {
   const [draft, setDraft] = useState(() => sessionStorage.getItem(DRAFT_KEY) ?? '');
@@ -26,6 +28,14 @@ export function NoteSession({ status, onStopped }: Props) {
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [awaitingNote, setAwaitingNote] = useState(false);
+
+  // contexto pós-reunião (fase 'finalizing')
+  const [context, setContext] = useState('');
+  const [contextLeft, setContextLeft] = useState(CONTEXT_WINDOW_SEC);
+  const [contextDone, setContextDone] = useState(false);
+  const [contextNote, setContextNote] = useState<string | null>(null);
+  const [sendingContext, setSendingContext] = useState(false);
 
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const sentRef = useRef<Set<string>>(new Set());
@@ -136,7 +146,8 @@ export function NoteSession({ status, onStopped }: Props) {
     try {
       await api.stop();
       sessionStorage.removeItem(DRAFT_KEY);
-      onStopped();
+      // não saímos daqui: a fase 'finalizing' ainda pede contexto extra
+      setAwaitingNote(true);
     } catch (err) {
       setError(friendlyError(err));
     } finally {
@@ -146,6 +157,53 @@ export function NoteSession({ status, onStopped }: Props) {
 
   const elapsed = useMemo(() => mmss(status?.elapsedSec ?? 0), [status?.elapsedSec]);
   const finalizing = status?.phase === 'finalizing';
+
+  // ------------------------------------------------- contexto pós-reunião
+
+  // countdown visual da janela de 45s (só enquanto o daemon está finalizando)
+  useEffect(() => {
+    if (!finalizing || contextDone) return;
+    const id = window.setInterval(() => {
+      setContextLeft((v) => (v <= 1 ? 0 : v - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [finalizing, contextDone]);
+
+  /**
+   * Fecha a janela de contexto. `text` vazio é resposta válida no contrato
+   * ("sem contexto, prossiga") — é o que o botão *Pular* manda, para o daemon
+   * não ficar esperando os 45s inteiros.
+   */
+  const sendContext = async (raw?: string) => {
+    const text = (raw ?? context).trim();
+    if (sendingContext) return;
+    if (raw === undefined && !text) return;
+    setSendingContext(true);
+    try {
+      await api.sessionContext(text);
+      setContextDone(true);
+      setContext('');
+    } catch (err) {
+      setContextDone(true);
+      setContextNote(
+        err instanceof ApiError && err.status === 409
+          ? 'A janela de contexto fechou — a nota já estava sendo escrita.'
+          : friendlyError(err),
+      );
+    } finally {
+      setSendingContext(false);
+    }
+  };
+
+  // a nota saiu (phase voltou a idle) → devolve o usuário pra Home
+  useEffect(() => {
+    if (!awaitingNote) return;
+    if (status?.phase === 'idle' && !status.recording) onStopped();
+  }, [awaitingNote, status?.phase, status?.recording, onStopped]);
+
+  const contextExpired = contextLeft <= 0;
+  const showContextForm = finalizing && !contextDone && !contextExpired;
+  const showFinalizing = finalizing && (contextDone || contextExpired);
 
   return (
     <div className={`screen session ${showTranscript ? 'with-transcript' : ''}`}>
@@ -215,33 +273,81 @@ export function NoteSession({ status, onStopped }: Props) {
             </div>
           )}
 
-          <div className="askbar">
-            <button
-              className={`btn-wave ${showTranscript ? 'is-on' : ''}`}
-              onClick={() => setShowTranscript((v) => !v)}
-              title={showTranscript ? 'Esconder transcript' : 'Mostrar transcript'}
-              aria-pressed={showTranscript}
-            >
-              <WaveIcon />
-            </button>
-            <input
-              className="ask-input"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void ask();
-              }}
-              placeholder="Pergunte qualquer coisa…"
-            />
-            <button
-              className="btn-send"
-              onClick={() => void ask()}
-              disabled={asking || !question.trim()}
-              aria-label="Enviar pergunta"
-            >
-              <SendIcon />
-            </button>
-          </div>
+          {showContextForm ? (
+            <div className="ctx">
+              <div className="ctx-head">
+                <span className="ctx-label">Algum contexto extra pra nota?</span>
+                <span className="ctx-clock">{contextLeft}s</span>
+              </div>
+              <div className="ctx-bar" aria-hidden>
+                <span
+                  className="ctx-bar-fill"
+                  style={{ width: `${(contextLeft / CONTEXT_WINDOW_SEC) * 100}%` }}
+                />
+              </div>
+              <div className="ctx-row">
+                <input
+                  className="ctx-input"
+                  value={context}
+                  onChange={(e) => setContext(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void sendContext();
+                  }}
+                  placeholder="O que a transcrição não pegou…"
+                  autoFocus
+                />
+                <button
+                  className="btn-ctx-skip"
+                  onClick={() => void sendContext('')}
+                  disabled={sendingContext}
+                  title="Seguir sem contexto extra"
+                >
+                  Pular
+                </button>
+                <button
+                  className="btn-ctx-send"
+                  onClick={() => void sendContext()}
+                  disabled={sendingContext || !context.trim()}
+                >
+                  {sendingContext ? 'Enviando…' : 'Enviar'}
+                </button>
+              </div>
+            </div>
+          ) : showFinalizing ? (
+            <div className="ctx ctx-wait">
+              <span className="spinner" aria-hidden />
+              <span className="ctx-label">Finalizando nota…</span>
+              {contextNote && <span className="ctx-note">{contextNote}</span>}
+            </div>
+          ) : (
+            <div className="askbar">
+              <button
+                className={`btn-wave ${showTranscript ? 'is-on' : ''}`}
+                onClick={() => setShowTranscript((v) => !v)}
+                title={showTranscript ? 'Esconder transcript' : 'Mostrar transcript'}
+                aria-pressed={showTranscript}
+              >
+                <WaveIcon />
+              </button>
+              <input
+                className="ask-input"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void ask();
+                }}
+                placeholder="Pergunte qualquer coisa…"
+              />
+              <button
+                className="btn-send"
+                onClick={() => void ask()}
+                disabled={asking || !question.trim()}
+                aria-label="Enviar pergunta"
+              >
+                <SendIcon />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

@@ -60,26 +60,52 @@ fn open_https(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Sobe o daemon do meeting-cli num terminal próprio (o chat da TUI depende
-/// de um terminal real — ver commit "tray inicia o daemon em terminal").
+/// Caminho absoluto do binário `meeting` dentro do WSL. O `fnm` não está no
+/// PATH do bash não-interativo, então o atalho/tray/app sempre chamam o
+/// caminho completo (ver commit "caminho absoluto do meeting no tray/atalho").
+#[cfg(target_os = "windows")]
+const WSL_MEETING_BIN: &str =
+    "/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/meeting";
+
+/// Sobe o daemon do meeting-cli SEM terminal (`--headless`): o app é o dono da
+/// UI agora, e o log ao vivo aparece na tela "Daemon" via `/daemon/logs`.
+/// O processo é solto (não herda stdio) — se o app fechar, o daemon continua.
 #[tauri::command]
-fn start_daemon() -> Result<(), String> {
-    spawn_daemon()
+fn start_daemon_headless() -> Result<(), String> {
+    spawn_daemon_headless()
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_daemon() -> Result<(), String> {
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "Meeting Daemon", "cmd", "/K", "meeting", "daemon"])
+fn spawn_daemon_headless() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
+
+    // CREATE_NO_WINDOW: nada de janela de console piscando. Não combinamos com
+    // DETACHED_PROCESS porque as duas flags são mutuamente exclusivas no
+    // CreateProcess — o desacoplamento vem do stdio em null + wsl.exe, que já
+    // sobrevive ao processo pai.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    std::process::Command::new("wsl.exe")
+        .args(["-e", WSL_MEETING_BIN, "daemon", "--headless"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "windows"))]
-fn spawn_daemon() -> Result<(), String> {
+fn spawn_daemon_headless() -> Result<(), String> {
+    use std::process::Stdio;
+
     std::process::Command::new("meeting")
-        .arg("daemon")
+        .args(["daemon", "--headless"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -100,7 +126,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_obsidian,
             open_https,
-            start_daemon
+            start_daemon_headless
         ])
         .setup(|app| {
             let open = MenuItemBuilder::with_id("open", "Abrir").build(app)?;
@@ -127,7 +153,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => show_main(app),
                     "daemon" => {
-                        if let Err(err) = spawn_daemon() {
+                        if let Err(err) = spawn_daemon_headless() {
                             eprintln!("falha ao iniciar o daemon: {err}");
                         }
                     }
