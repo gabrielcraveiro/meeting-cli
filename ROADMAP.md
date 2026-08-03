@@ -25,7 +25,8 @@ Hoje tudo acontece depois da reunião. O maior ganho de produtividade é ANTES:
 
 - `meeting briefing`: motor claude lê agenda (ICS) + vault e gera o dia:
   - reuniões de hoje, com pendências das reuniões anteriores com as mesmas pessoas
-  - action items seus que vencem/estão parados
+  - action items abertos no vault (formato Obsidian Tasks — ver Fase 2) que
+    vencem hoje ou estão parados
   - "tema recorrente há 3 semanas sem decisão" (o que ninguém percebe sozinho)
 - Agendado 8h (cron WSL) → toast + nota diária no vault
 - Bônus: toast 5 min antes de cada call com o resumo da última reunião com
@@ -34,18 +35,23 @@ Hoje tudo acontece depois da reunião. O maior ganho de produtividade é ANTES:
 **Por que primeiro**: reaproveita 100% do motor claude + calendar.ts que já
 existem. É prompt + comando + cron.
 
-## Fase 2 — Action items viram trabalho rastreado: Jira (~1 dia)
+## Fase 2 — Tasks vivem no Obsidian (~1 dia)
 
-ePharma vive no Jira. Nota bonita que ninguém executa = reunião perdida.
+Ferramenta pessoal → tasks pessoais no vault (Jira fica fora de propósito:
+esfera corporativa separada). Usar o Obsidian na capacidade máxima:
 
-- Pós-nota: claude extrai action items estruturados (responsável, prazo, contexto)
-- Confirmação no terminal (ou toast clicável): "3 action items → criar no Jira?"
-- Cria issues linkadas à nota (URL da nota no description, chave Jira no frontmatter)
-- Semi-automático de propósito: você aprova antes de criar (confiança > automação)
-- Alavanca: skill `atlassian:capture-tasks-from-meeting-notes` + MCP Atlassian
-  já disponíveis no ambiente
+- Action items da nota saem no formato **Obsidian Tasks**:
+  `- [ ] Validar fluxo de elegibilidade 📅 2026-08-05 [[Reunião X]] #meeting/action`
+  (claude infere prazo do contexto da conversa quando mencionado)
+- Nota-dashboard `Tasks.md` no vault: query Tasks/Dataview agregando todos os
+  action items abertos por prazo e por pessoa — atualiza sozinha, é só abrir
+- Tasks concluídas você marca no próprio Obsidian (checkbox) — o briefing
+  matinal (Fase 1) lê o estado real e para de cobrar o que já foi feito
+- Backlinks automáticos: cada action item linka a nota da reunião de origem;
+  no grafo do Obsidian, pessoa ↔ reunião ↔ task viram rede navegável
 
-**Métrica**: % de action items de reunião que viram issue sem digitação manual.
+**Métrica**: abrir o Obsidian de manhã e a lista de pendências estar completa
+sem você ter digitado nenhuma task.
 
 ## Fase 3 — Memória institucional consultável (~1 dia)
 
