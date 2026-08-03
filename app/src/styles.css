@@ -1559,3 +1559,42 @@ button:disabled {
 .prose-editorial th {
   font-family: var(--sans);
 }
+
+/* ── Cabeçalho de metadados da nota (frontmatter destilado) ──────────── */
+
+.note-meta-head {
+  padding: 4px 0 14px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+
+.note-meta-title {
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+
+.note-meta-facts {
+  font-size: 13px;
+  color: var(--ink-mute);
+  margin: 0 0 10px;
+}
+
+.note-meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.note-meta-tag {
+  font-size: 11.5px;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 99px;
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+}
