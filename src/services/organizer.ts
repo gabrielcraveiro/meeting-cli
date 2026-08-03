@@ -74,10 +74,35 @@ function authHeader(config: Config): Record<string, string> {
   return { Authorization: `Bearer ${config.chatApiKey}` };
 }
 
+export interface UserNote {
+  ts: number;   // segundos desde o início da reunião
+  text: string;
+}
+
 export interface OrganizeOptions {
   meetingDate?: string;     // YYYY-MM-DD for date resolution
   participants?: string[];  // from calendar, helps speaker inference
   extraContext?: string;    // additional context (past meetings, etc.)
+  userNotes?: UserNote[];   // anotações do usuário ao vivo — ESQUELETO da nota final
+}
+
+/**
+ * Instrução compartilhada pelos dois engines: as anotações do usuário mandam na
+ * estrutura da nota. É a única informação do pipeline que carrega intenção
+ * humana explícita — ignorá-la produz uma nota genérica.
+ */
+export const USER_NOTES_INSTRUCTION =
+  'ATENÇÃO — PRIORIDADE MÁXIMA: as anotações do usuário abaixo são o ESQUELETO da nota. '
+  + 'Cada bullet dele define uma seção (ou um item de destaque) e a ORDEM DE PRIORIDADE da nota. '
+  + 'Expanda CADA anotação com o que a transcrição diz sobre aquele ponto (contexto, quem falou, '
+  + 'decisão, números, prazos) — os timestamps das anotações indicam o trecho da transcrição a usar. '
+  + 'SÓ DEPOIS de cobrir todas elas, complete a nota com o que ele não anotou. '
+  + 'Nada anotado pelo usuário pode ficar de fora ou virar nota de rodapé.';
+
+export function formatUserNotes(notes: UserNote[]): string {
+  const fmt = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  return notes.map(n => `- [${fmt(n.ts)}] ${n.text}`).join('\n');
 }
 
 /**
@@ -120,6 +145,10 @@ export async function organizeTranscript(transcript: string, config: Config, opt
     applyTokenBudget(transcript, options?.extraContext);
   if (budgetedExtra) {
     userContent += `\nContexto adicional:\n${budgetedExtra}\n`;
+  }
+  if (options?.userNotes && options.userNotes.length > 0) {
+    userContent += `\n# Anotações do usuário durante a reunião (ESQUELETO DA NOTA)\n`
+      + `${USER_NOTES_INSTRUCTION}\n\n${formatUserNotes(options.userNotes)}\n`;
   }
   userContent += `\nTranscription:\n\n${budgetedTranscript}`;
 

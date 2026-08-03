@@ -32,6 +32,20 @@ export async function organizeWithClaude(
     fs.writeFileSync(contextPath, options.extraContext);
   }
 
+  // Anotações ao vivo do usuário: viram arquivo próprio para não competirem com o
+  // resto do contexto — o workflow abaixo as promove a esqueleto da nota.
+  let notesPath: string | null = null;
+  if (options?.userNotes?.length) {
+    const { USER_NOTES_INSTRUCTION, formatUserNotes } = await import('./organizer');
+    notesPath = path.join(tmpDir, 'anotacoes.md');
+    fs.writeFileSync(
+      notesPath,
+      `# Anotações do usuário durante a reunião\n\n`
+      + `${USER_NOTES_INSTRUCTION}\n\n`
+      + `${formatUserNotes(options.userNotes)}\n`,
+    );
+  }
+
   const meta: string[] = [];
   if (options?.meetingDate) meta.push(`Data da reunião: ${options.meetingDate}`);
   if (options?.participants?.length) {
@@ -44,6 +58,13 @@ export async function organizeWithClaude(
     `Você está em modo agente com ferramentas read-only. Siga esta ordem:\n` +
     `1. Leia a transcrição completa em: ${transcriptPath}\n` +
     (contextPath ? `2. Leia o contexto pré-carregado em: ${contextPath}\n` : '') +
+    (notesPath
+      ? `2b. ⚠️ LEIA PRIMEIRO E OBEDEÇA: as anotações que o usuário fez AO VIVO durante a reunião estão em: ${notesPath}\n` +
+        `   Elas são o ESQUELETO da nota — cada bullet dele define uma seção/item e a ordem de prioridade. ` +
+        `Expanda CADA anotação com o que a transcrição diz sobre aquele ponto (use o timestamp da anotação ` +
+        `para achar o trecho). SÓ DEPOIS de cobrir todas complete a nota com o que ele não anotou. ` +
+        `Nenhuma anotação pode ficar de fora.\n`
+      : '') +
     `3. O vault Obsidian do usuário está em: ${config.vaultPath} — use Grep/Glob/Read para ` +
     `pesquisar reuniões anteriores relacionadas (mesmos participantes, mesmo projeto, mesmos temas).\n` +
     `4. Use o que encontrar para: corrigir erros de transcrição em nomes próprios, siglas e jargões ` +

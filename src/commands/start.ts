@@ -16,6 +16,9 @@ import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
 import { matchSpeaker, enrollSpeaker } from '../services/voice';
 import { readBridge } from '../services/bridge';
 import { notifyWindows } from '../services/notify';
+import {
+  enableReporting, reportTranscript, reportInsight, reportState, reportChatReply, fetchQueue,
+} from '../services/sessionReporter';
 
 const DEEPGRAM_PER_MIN = 0.0077;  // nova-3 + diarization, single-pass
 const SEGMENT_SECONDS = 45;
@@ -310,6 +313,8 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   // so the interactive calendar picker is skipped (no one is at the terminal).
   const fromBrowser = opts.browser === true;
   if (fromBrowser) {
+    // Live reporting to the daemon (desktop app) — only in browser-driven sessions
+    enableReporting();
     const bridge = readBridge();
     if (bridge) {
       if (!topic && bridge.title) topic = bridge.title.trim();
@@ -429,6 +434,9 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   let lastInsightLineCount = 0;
   let insightBusy = false;
   let chatBusy = false;
+  let daemonQueueBusy = false;
+  // Anotações feitas pelo usuário no app durante a reunião — esqueleto da nota final
+  const userNotes: Array<{ ts: number; text: string }> = [];
   let consecutiveSilentSegments = 0;
   let micDeadSegments = 0;
   let micWarned = false;
@@ -498,6 +506,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
         for (let i = 1; i < lines.length; i++) {
           transcriptLines.push(lines[i]);
         }
+        // Mirror to the daemon so the app can render the live transcript
+        reportTranscript(lines.map(l => {
+          const m = l.match(/^\s*\[([^\]]{1,60})\]\s*(.*)$/);
+          return { ts: offsetSec, speaker: m ? m[1] : '', text: (m ? m[2] : l).trim() };
+        }));
       }
 
       if (!semanticContextLoaded) {
@@ -578,6 +591,12 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       ui.appendLine('');
       ui.appendLine(chalk.gray('  ─────────────────────────────────────────'));
       ui.appendLine(chalk.bold.magenta('  Insights') + chalk.gray(` (${formatTime(elapsedSec)})`));
+
+      // Espelha no daemon (app): um insight por bullet
+      for (const rawLine of response.split('\n')) {
+        const t = rawLine.trim();
+        if (t && t !== '-') reportInsight(elapsedSec, t);
+      }
 
       // Highlight lines that mention the user by name
       const userName = config.userName || '';
@@ -725,6 +744,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   async function finalize(durationSec: number) {
     if (stopping) return;
     stopping = true;
+    reportState('finalizing', topic || undefined, elapsedSec);
 
     if (pollInterval) clearInterval(pollInterval);
     if (timerInterval) clearInterval(timerInterval);
@@ -1092,6 +1112,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
         meetingDate: date,
         participants: calendarAttendees.length > 0 ? calendarAttendees : undefined,
         extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
+        userNotes: userNotes.length > 0 ? userNotes : undefined,
       });
       summary = result.text;
       chatCost = result.costUsd;
@@ -1170,6 +1191,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       title: meetingTitle,
       participants,
       meetingType: templateName,
+      sourceNotes: userNotes.length > 0,
     });
     s.success({ text: path.basename(notePath) });
 
@@ -1456,13 +1478,53 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     }
   }
 
+  // Daemon queue (desktop app) — chat questions and user notes arrive via long-poll.
+  // Non-blocking: the long-poll runs detached and the busy flag prevents overlap.
+  function pollDaemonQueue(): void {
+    if (!fromBrowser || daemonQueueBusy || stopping) return;
+    daemonQueueBusy = true;
+    void (async () => {
+      try {
+        const items = await fetchQueue();
+        for (const item of items) {
+          if (item.type === 'note') {
+            userNotes.push({ ts: item.ts, text: item.text });
+            ui.appendLine(chalk.cyan(`  📝 ${item.text}`));
+            continue;
+          }
+          // Chat do app: mesmo caminho do chat do TUI (buildSystemMsg + chatWithMeetings)
+          try {
+            const reply = await chatWithMeetings([
+              { role: 'system', content: buildSystemMsg() },
+              { role: 'user', content: item.message },
+            ], config);
+            reportChatReply(item.id, reply);
+            ui.appendLine(chalk.gray(`  💬 app: ${item.message.slice(0, 60)}`));
+          } catch (err) {
+            reportChatReply(item.id, `Erro ao responder: ${(err as Error).message}`);
+          }
+        }
+      } finally {
+        daemonQueueBusy = false;
+      }
+    })();
+  }
+
   // Timer — header update + safety limits
+  let reportTick = 0;
   timerInterval = setInterval(() => {
     pollBridge();
+
     // Subtract paused time from elapsed
     const rawElapsed = Math.floor((Date.now() - startTime) / 1000);
     const currentPause = paused ? Math.floor((Date.now() - pauseStartTime) / 1000) : 0;
     elapsedSec = rawElapsed - totalPausedSec - currentPause;
+
+    if (fromBrowser) {
+      reportTick++;
+      if (reportTick % 5 === 0) reportState('recording', topic || undefined, elapsedSec);
+      if (reportTick % 3 === 0) pollDaemonQueue();
+    }
 
     // Update header with current time and live cost estimate (single redraw)
     const segMin = (transcribedSegments * SEGMENT_SECONDS) / 60;

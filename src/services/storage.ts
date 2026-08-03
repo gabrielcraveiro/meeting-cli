@@ -163,6 +163,8 @@ export async function createMeetingNote(
     title?: string;
     participants?: string[];
     meetingType?: string;
+    /** true quando o usuário fez anotações ao vivo (esqueleto da nota) */
+    sourceNotes?: boolean;
   }
 ): Promise<string> {
   const meetingsDir = path.join(config.vaultPath, 'Meetings');
@@ -179,12 +181,13 @@ export async function createMeetingNote(
   const participantsList = params.participants && params.participants.length > 0
     ? `\nparticipants: [${params.participants.join(', ')}]` : '';
   const meetingType = params.meetingType || 'default';
+  const sourceNotesLine = params.sourceNotes ? '\nsourceNotes: true' : '';
   const audioEmbed = params.audioPath ? `![[${params.audioPath}]]\n` : '';
 
   const content = `---
 type: meeting
 meeting_type: ${meetingType}
-tags: [${allTags.join(', ')}]${participantsList}
+tags: [${allTags.join(', ')}]${participantsList}${sourceNotesLine}
 date: ${params.date}
 time: ${params.time}
 title: "${title}"
