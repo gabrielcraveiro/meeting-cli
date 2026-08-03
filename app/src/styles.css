@@ -1598,3 +1598,48 @@ button:disabled {
   background: var(--sage-wash);
   color: var(--sage-deep);
 }
+
+/* ── Insights acima do editor (faixa dispensável) ────────────────────── */
+
+.insights-strip {
+  flex: 0 0 auto;
+  max-height: 168px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px 8px;
+}
+
+.insight-chip {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 30px 8px 10px;
+  border-radius: var(--r-md);
+  background: var(--sage-wash);
+  border: 1px solid var(--sage-wash-deep);
+  animation: rise 180ms ease both;
+}
+
+.insight-when {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sage-deep);
+}
+
+.insight-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.insight-chip .card-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}

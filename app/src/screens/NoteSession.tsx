@@ -7,9 +7,12 @@ import { mmss } from '../lib/format';
 import { subscribeSse } from '../lib/sse';
 
 type Card =
-  | { kind: 'insight'; id: string; ts: number; text: string }
   | { kind: 'reply'; id: string; question: string; text: string }
   | { kind: 'pending'; id: string; question: string };
+
+type InsightItem = { id: string; ts: number; text: string };
+
+const insightKey = (i: { ts: number; text: string }) => `${i.ts}|${i.text}`;
 
 type Props = {
   status: Status | null;
@@ -90,21 +93,32 @@ export function NoteSession({ status, onStopped }: Props) {
 
   // ------------------------------------------------------- insights (SSE)
 
+  // Insights vivem ACIMA do editor (não misturados com o chat) e o snapshot
+  // do SSE reidrata o que foi gerado antes desta tela montar — sem ele,
+  // navegar pra Home e voltar apagava tudo.
+  const [insights, setInsights] = useState<InsightItem[]>([]);
+  const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(new Set());
+
   useEffect(() => {
+    const merge = (incoming: Insight[]) =>
+      setInsights((prev) => {
+        const seen = new Set(prev.map(insightKey));
+        const fresh = incoming
+          .filter((i) => i && typeof i.text === 'string' && !seen.has(insightKey(i)))
+          .map((i) => ({ id: insightKey(i), ts: i.ts, text: i.text }));
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+
     const stop = subscribeSse('/session/insights/stream', {
       events: {
-        insight: (data) => {
-          const ins = data as Insight;
-          if (!ins || typeof ins.text !== 'string') return;
-          setCards((prev) => [
-            ...prev,
-            { kind: 'insight', id: `ins-${ins.ts}-${prev.length}`, ts: ins.ts, text: ins.text },
-          ]);
-        },
+        snapshot: (data) => merge(((data as { insights?: Insight[] })?.insights) ?? []),
+        insight: (data) => merge([data as Insight]),
       },
     });
     return stop;
   }, []);
+
+  const visibleInsights = insights.filter((i) => !dismissedInsights.has(i.id));
 
   // ------------------------------------------------------- chat
 
@@ -226,6 +240,24 @@ export function NoteSession({ status, onStopped }: Props) {
 
         {error && <p className="session-error">{error}</p>}
 
+        {visibleInsights.length > 0 && (
+          <div className="insights-strip" aria-label="Insights da reunião">
+            {visibleInsights.map((i) => (
+              <div className="insight-chip" key={i.id}>
+                <span className="insight-when">{mmss(i.ts)}</span>
+                <Markdown source={i.text} className="prose-compact insight-text" />
+                <button
+                  className="card-dismiss"
+                  onClick={() => setDismissedInsights((p) => new Set(p).add(i.id))}
+                  aria-label="Dispensar insight"
+                >
+                  <CloseIcon size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <textarea
           ref={taRef}
           className="notepad"
@@ -250,12 +282,6 @@ export function NoteSession({ status, onStopped }: Props) {
                   >
                     <CloseIcon size={12} />
                   </button>
-                  {c.kind === 'insight' && (
-                    <>
-                      <span className="card-tag">insight · {mmss(c.ts)}</span>
-                      <Markdown source={c.text} className="prose-compact" />
-                    </>
-                  )}
                   {c.kind === 'pending' && (
                     <>
                       <span className="card-tag">{c.question}</span>
