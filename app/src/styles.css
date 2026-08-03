@@ -1635,7 +1635,45 @@ button:disabled {
   flex: 1;
   min-width: 0;
   font-size: 12.5px;
+  line-height: 1.5;
   color: var(--ink-soft);
+  /* 2 linhas; o texto completo vive no tooltip (title) */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.insight-kind {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 3px 8px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.kind-decisao {
+  background: var(--sage-wash-deep);
+  color: var(--sage-deep);
+}
+
+.kind-acao {
+  background: #e3ecf3;
+  color: #47617d;
+}
+
+.kind-risco {
+  background: #f6e8d8;
+  color: #8a6432;
+}
+
+.kind-info {
+  background: var(--cream-deep);
+  color: var(--ink-mute);
 }
 
 .insight-chip .card-dismiss {

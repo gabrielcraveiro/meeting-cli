@@ -157,6 +157,26 @@
     return !!document.querySelector(SEL.CAPTIONS_RENDERER);
   }
 
+  // Esconde o painel de legendas VISUALMENTE, mantendo-o vivo no DOM (a
+  // raspagem continua). opacity+pointer-events em vez de display:none para a
+  // virtualização do Teams seguir renderizando/atualizando as mensagens.
+  const HIDE_STYLE_ID = 'meeting-cli-hide-captions';
+  function hideCaptionsPanel() {
+    if (document.getElementById(HIDE_STYLE_ID)) return;
+    if (!captionsVisible()) return;
+    const style = document.createElement('style');
+    style.id = HIDE_STYLE_ID;
+    style.textContent =
+      "[data-tid='closed-caption-v2-window-wrapper'], [data-tid='closed-captions-renderer'] {" +
+      ' opacity: 0 !important; pointer-events: none !important; user-select: none !important; }';
+    document.head.appendChild(style);
+    console.log('[meeting-cli] painel de legendas ocultado (captura segue ativa)');
+  }
+
+  function unhideCaptionsPanel() {
+    document.getElementById(HIDE_STYLE_ID)?.remove();
+  }
+
   // Click chain: More → Language & speech → Turn on captions.
   // Captions in Teams are per-user (private) — enabling them doesn't notify others.
   function tryEnableCaptions() {
@@ -285,6 +305,7 @@
         setTimeout(tryEnableCaptions, 4000); // captions → speaker timeline
       } else if (inCall) {
         tryEnableCaptions();
+        hideCaptionsPanel();  // assim que o painel existir, some da tela
         const sharing = isSharing();
         if (sharing !== sharingActive) {
           sharingActive = sharing;
@@ -307,6 +328,7 @@
           inCall = false;
           absentPolls = 0;
           flushSpeech();  // final spans before stop
+          unhideCaptionsPanel();
           send('CALL_ENDED', {});
           console.log('[meeting-cli] call ended,', speechSpans.length, 'spans de fala capturados');
         }

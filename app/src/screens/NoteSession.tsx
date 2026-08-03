@@ -14,6 +14,24 @@ type InsightItem = { id: string; ts: number; text: string };
 
 const insightKey = (i: { ts: number; text: string }) => `${i.ts}|${i.text}`;
 
+/** Insights chegam como "- [decisao] texto…" — o marcador vira badge visual. */
+const INSIGHT_KINDS: Record<string, { label: string; cls: string }> = {
+  decisao: { label: 'decisão', cls: 'kind-decisao' },
+  acao: { label: 'ação', cls: 'kind-acao' },
+  risco: { label: 'risco', cls: 'kind-risco' },
+  pendencia: { label: 'pendência', cls: 'kind-risco' },
+  info: { label: 'info', cls: 'kind-info' },
+};
+
+function parseInsight(text: string): { kind?: { label: string; cls: string }; body: string } {
+  const m = text.match(/^-?\s*\[(\w+)\]\s*(.*)$/s);
+  if (m) {
+    const key = m[1].normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    return { kind: INSIGHT_KINDS[key] ?? { label: m[1].toLowerCase(), cls: 'kind-info' }, body: m[2] };
+  }
+  return { body: text.replace(/^-\s*/, '') };
+}
+
 type Props = {
   status: Status | null;
   onStopped: () => void;
@@ -242,19 +260,26 @@ export function NoteSession({ status, onStopped }: Props) {
 
         {visibleInsights.length > 0 && (
           <div className="insights-strip" aria-label="Insights da reunião">
-            {visibleInsights.map((i) => (
-              <div className="insight-chip" key={i.id}>
-                <span className="insight-when">{mmss(i.ts)}</span>
-                <Markdown source={i.text} className="prose-compact insight-text" />
-                <button
-                  className="card-dismiss"
-                  onClick={() => setDismissedInsights((p) => new Set(p).add(i.id))}
-                  aria-label="Dispensar insight"
-                >
-                  <CloseIcon size={12} />
-                </button>
-              </div>
-            ))}
+            {visibleInsights.map((i) => {
+              const parsed = parseInsight(i.text);
+              return (
+                <div className="insight-chip" key={i.id} title={`${mmss(i.ts)} — ${parsed.body}`}>
+                  {parsed.kind ? (
+                    <span className={`insight-kind ${parsed.kind.cls}`}>{parsed.kind.label}</span>
+                  ) : (
+                    <span className="insight-when">{mmss(i.ts)}</span>
+                  )}
+                  <span className="insight-text">{parsed.body}</span>
+                  <button
+                    className="card-dismiss"
+                    onClick={() => setDismissedInsights((p) => new Set(p).add(i.id))}
+                    aria-label="Dispensar insight"
+                  >
+                    <CloseIcon size={12} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 
