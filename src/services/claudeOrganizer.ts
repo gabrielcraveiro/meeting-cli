@@ -49,7 +49,17 @@ export async function organizeWithClaude(
     `4. Use o que encontrar para: corrigir erros de transcrição em nomes próprios, siglas e jargões ` +
     `(o ASR erra termos como nomes de sistemas internos — o vault tem a grafia correta); inferir ` +
     `identidades dos speakers; conectar decisões e action items com reuniões passadas.\n` +
-    `5. Sua ÚLTIMA mensagem deve conter APENAS a nota final no formato do contrato acima — ` +
+    `5. Na seção de action items, além da tabela, emita cada ação também no formato ` +
+    `**Obsidian Tasks** (uma linha por ação, no fim da seção):\n` +
+    `   - [ ] <descrição> 📅 YYYY-MM-DD #meeting/action\n` +
+    `   • O 📅 YYYY-MM-DD SÓ entra quando um prazo foi mencionado na conversa ou é claramente ` +
+    `inferível dela (converta "amanhã", "até sexta", "semana que vem" usando a data da reunião). ` +
+    `Sem prazo → omita o 📅 inteiro, não invente data.\n` +
+    `   • Responsável diferente do usuário que gravou → prefixe a descrição com **Nome:** ` +
+    `(ex: \`- [ ] **Ana:** revisar contrato 📅 2026-08-07 #meeting/action\`). Se a ação é do próprio ` +
+    `usuário, sem prefixo.\n` +
+    `   • A tag #meeting/action é obrigatória em toda linha — é o que alimenta o dashboard Tasks.md do vault.\n` +
+    `6. Sua ÚLTIMA mensagem deve conter APENAS a nota final no formato do contrato acima — ` +
     `sem preâmbulo, sem explicações, sem cercas de código em volta.\n` +
     `</workflow>\n\n` +
     (meta.length > 0 ? `<metadados>\n${meta.join('\n')}\n</metadados>\n` : '');

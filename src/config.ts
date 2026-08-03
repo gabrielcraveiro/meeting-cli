@@ -60,6 +60,17 @@ const DEFAULT_PROMPT =
   '- Responsavel = nome real da pessoa (NUNCA "equipe" ou "time" se alguem especifico foi mencionado)\n' +
   '- Prazo = DATA ABSOLUTA sempre que possivel. Converta "hoje" para a data da reuniao, "amanha" para +1 dia, "semana que vem" para data aproximada. Se nao mencionado: "A definir"\n' +
   '- Prioridade = Alta/Media/Baixa baseado na urgencia expressa na conversa\n\n' +
+  'Depois da tabela, repita OS MESMOS action items no formato Obsidian Tasks (uma linha por acao):\n' +
+  '- [ ] <descricao da acao> 📅 YYYY-MM-DD #meeting/action\n' +
+  'Regras do formato Obsidian Tasks:\n' +
+  '- A data 📅 YYYY-MM-DD SO aparece quando um prazo foi mencionado na conversa ou e claramente ' +
+  'inferivel dela (ex: "ate sexta", "amanha", "na proxima sprint"). Se nao houver prazo, OMITA o 📅 ' +
+  'por completo — nao invente data, nao escreva "A definir".\n' +
+  '- Quando o responsavel NAO for o usuario que gravou a reuniao, comece a descricao com o nome em ' +
+  'negrito seguido de dois pontos: `- [ ] **Ana:** revisar contrato de elegibilidade #meeting/action`\n' +
+  '- Quando o responsavel for o proprio usuario, escreva a acao direto, sem prefixo de nome.\n' +
+  '- A tag #meeting/action e OBRIGATORIA no fim de cada linha (e o que alimenta o dashboard Tasks.md).\n' +
+  '- Use `- [ ] ` exatamente (checkbox desmarcado), sem numeracao e sem indentacao.\n\n' +
   '## Pontos em Aberto\n- Questoes levantadas SEM resolucao clara. Riscos. Dependencias externas. Divergencias de opiniao nao resolvidas.\n' +
   '</output>\n\n' +
   '<rules>\n' +

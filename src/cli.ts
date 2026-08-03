@@ -12,6 +12,7 @@ import { cmdSetup, isSidecarInstalled } from './commands/setup';
 import { cmdDoctor } from './commands/doctor';
 import { cmdStats } from './commands/stats';
 import { cmdDaemon } from './commands/daemon';
+import { cmdBriefing } from './commands/briefing';
 import { listTemplates } from './services/templates';
 
 const program = new Command();
@@ -41,6 +42,7 @@ program.helpInformation = function () {
     `    ${chalk.green('meeting transcribe')} ${chalk.cyan('<arquivo>')}     Transcreve áudio existente`,
     '',
     chalk.bold('  Consulta'),
+    `    ${chalk.green('meeting briefing')}                 Briefing do dia (agenda + pendências do vault)`,
     `    ${chalk.green('meeting list')}                     Lista reuniões gravadas`,
     `    ${chalk.green('meeting summary')}                  Mostra resumos recentes`,
     `    ${chalk.green('meeting search')} ${chalk.cyan('"deploy"')}          Busca por texto nas reuniões`,
@@ -108,6 +110,13 @@ program
   .description('Abre chat interativo com contexto das reuniões')
   .option('-n, --limit <n>', 'Número de reuniões no contexto', '10')
   .action(cmdChat);
+
+program
+  .command('briefing')
+  .description('Briefing matinal: reuniões de hoje, pendências e temas sem decisão')
+  .option('--quiet', 'Sem output interativo (para cron)')
+  .option('--no-note', 'Não salvar a nota de briefing no vault')
+  .action(cmdBriefing);
 
 program
   .command('templates')

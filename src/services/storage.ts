@@ -89,6 +89,61 @@ export function loadMeetingSummaries(config: Config, limit = 5): string[] {
   return results;
 }
 
+// Cria a nota-dashboard Tasks.md no vault, SE ainda nao existir.
+// Nunca sobrescreve: o usuario pode customizar as queries livremente.
+// Idempotente e barato — pode ser chamado a cada criacao de nota.
+export function ensureTasksDashboard(config: Config): string | null {
+  const dashPath = path.join(config.vaultPath, 'Tasks.md');
+  try {
+    if (fs.existsSync(dashPath)) return dashPath;
+    fs.mkdirSync(config.vaultPath, { recursive: true });
+
+    const content = `---
+type: dashboard
+tags: [meeting-cli, tasks]
+---
+# Tarefas das reuniões
+
+> Gerado uma única vez pelo \`meeting\`. Edite à vontade — nunca é sobrescrito.
+> As listas abaixo se atualizam sozinhas (plugin **Obsidian Tasks**): elas leem
+> todos os action items marcados com \`#meeting/action\` nas notas do vault.
+> Concluiu algo? Marque o checkbox aqui mesmo — o briefing matinal lê o estado real
+> e para de cobrar o que já foi feito.
+
+## ⚠️ Vencidas
+
+\`\`\`tasks
+not done
+tag includes #meeting/action
+due before today
+sort by due
+\`\`\`
+
+## 📅 Abertas por prazo
+
+\`\`\`tasks
+not done
+tag includes #meeting/action
+sort by due
+group by due
+\`\`\`
+
+## ✅ Concluídas recentemente
+
+\`\`\`tasks
+done
+tag includes #meeting/action
+sort by done reverse
+limit 20
+\`\`\`
+`;
+    fs.writeFileSync(dashPath, content, 'utf-8');
+    return dashPath;
+  } catch {
+    return null;  // dashboard e conveniencia: nunca quebra o fluxo da nota
+  }
+}
+
 export async function createMeetingNote(
   config: Config,
   params: {
@@ -157,5 +212,6 @@ ${params.transcript}
 `;
 
   fs.writeFileSync(filePath, content, 'utf-8');
+  ensureTasksDashboard(config);
   return filePath;
 }

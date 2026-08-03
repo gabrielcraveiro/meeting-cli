@@ -19,36 +19,47 @@ O sistema já sobe sozinho no boot. O que falta é rodar em condições reais:
 
 **Critério de saída**: 1 semana sem precisar editar nota à mão no Obsidian.
 
-## Fase 1 — Briefing matinal: o sistema olha pra frente (~meio dia)
+## Fase 1 — Briefing matinal: o sistema olha pra frente (~meio dia) — ✅ implementado
 
 Hoje tudo acontece depois da reunião. O maior ganho de produtividade é ANTES:
 
-- `meeting briefing`: motor claude lê agenda (ICS) + vault e gera o dia:
-  - reuniões de hoje, com pendências das reuniões anteriores com as mesmas pessoas
-  - action items abertos no vault (formato Obsidian Tasks — ver Fase 2) que
-    vencem hoje ou estão parados
-  - "tema recorrente há 3 semanas sem decisão" (o que ninguém percebe sozinho)
-- Agendado 8h (cron WSL) → toast + nota diária no vault
-- Bônus: toast 5 min antes de cada call com o resumo da última reunião com
-  aquelas pessoas ("contexto de bolso")
+- [x] `meeting briefing`: motor claude lê agenda (ICS) + vault e gera o dia
+      (`src/commands/briefing.ts`; flags `--quiet` para cron e `--no-note`):
+  - [x] reuniões de hoje, com pendências das reuniões anteriores com as mesmas pessoas
+  - [x] action items abertos no vault (formato Obsidian Tasks — ver Fase 2) que
+        vencem hoje ou estão parados (>7 dias)
+  - [x] "tema recorrente há 3 semanas sem decisão" (o que ninguém percebe sozinho)
+  - [x] degradação: sem ICS roda só com o vault; sem o binário `claude` monta
+        briefing básico (agenda + grep de `- [ ] `) e avisa
+- [x] Agendado 8h seg-sex (cron WSL) → toast + nota `Briefings/YYYY-MM-DD.md` no vault.
+      Instalar com `bash scripts/install-briefing-schedule.sh` (idempotente;
+      `--remove` desfaz). Usa caminho absoluto do binário — fnm não está no PATH
+      de shell não-interativo.
+- [ ] Bônus (pendente): toast 5 min antes de cada call com o resumo da última
+      reunião com aquelas pessoas ("contexto de bolso")
 
 **Por que primeiro**: reaproveita 100% do motor claude + calendar.ts que já
 existem. É prompt + comando + cron.
 
-## Fase 2 — Tasks vivem no Obsidian (~1 dia)
+## Fase 2 — Tasks vivem no Obsidian (~1 dia) — ✅ implementado
 
 Ferramenta pessoal → tasks pessoais no vault (Jira fica fora de propósito:
 esfera corporativa separada). Usar o Obsidian na capacidade máxima:
 
-- Action items da nota saem no formato **Obsidian Tasks**:
-  `- [ ] Validar fluxo de elegibilidade 📅 2026-08-05 [[Reunião X]] #meeting/action`
-  (claude infere prazo do contexto da conversa quando mencionado)
-- Nota-dashboard `Tasks.md` no vault: query Tasks/Dataview agregando todos os
-  action items abertos por prazo e por pessoa — atualiza sozinha, é só abrir
-- Tasks concluídas você marca no próprio Obsidian (checkbox) — o briefing
-  matinal (Fase 1) lê o estado real e para de cobrar o que já foi feito
-- Backlinks automáticos: cada action item linka a nota da reunião de origem;
-  no grafo do Obsidian, pessoa ↔ reunião ↔ task viram rede navegável
+- [x] Action items da nota saem no formato **Obsidian Tasks**:
+      `- [ ] **Ana:** Validar fluxo de elegibilidade 📅 2026-08-05 #meeting/action`
+      (claude infere prazo do contexto da conversa quando mencionado; sem prazo,
+      o 📅 é omitido). Instruído nos dois motores: `<workflow>` do
+      `claudeOrganizer.ts` e `DEFAULT_PROMPT` do `config.ts` (engine chat).
+- [x] Nota-dashboard `Tasks.md` no vault: queries do plugin Tasks agregando
+      action items abertos por prazo, mais bloco de vencidas e de concluídas
+      recentes. Criada por `ensureTasksDashboard()` em `services/storage.ts`,
+      chamada em `createMeetingNote` — só cria se não existir, nunca sobrescreve.
+- [x] Tasks concluídas você marca no próprio Obsidian (checkbox) — o briefing
+      matinal (Fase 1) ignora `- [x] ` e para de cobrar o que já foi feito
+- [ ] Backlinks automáticos (parcial): o briefing referencia `[[nota de origem]]`;
+      falta a linha da task na nota carregar o link para a reunião de origem
+      (hoje a task já vive dentro da própria nota, então o backlink é implícito)
 
 **Métrica**: abrir o Obsidian de manhã e a lista de pendências estar completa
 sem você ter digitado nenhuma task.
