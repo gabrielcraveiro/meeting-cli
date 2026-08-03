@@ -196,6 +196,67 @@ export async function chatWithMeetings(
   messages: Array<{ role: string; content: string }>,
   config: Config
 ): Promise<string> {
+  try {
+    return await chatViaLiteLLM(messages, config);
+  } catch (err) {
+    // LiteLLM é corporativo (VPN) — fora dela, o chat ao vivo e os insights
+    // morriam. Com o engine claude configurado, degradamos para uma chamada
+    // local `claude -p` sem tools: mais lenta, mas funciona em qualquer rede.
+    if (config.organizerEngine === 'claude') {
+      try {
+        return await chatViaClaude(messages, config);
+      } catch {
+        throw err;  // erro original do LiteLLM é mais informativo
+      }
+    }
+    throw err;
+  }
+}
+
+function chatViaClaude(
+  messages: Array<{ role: string; content: string }>,
+  config: Config
+): Promise<string> {
+  const { spawn } = require('child_process') as typeof import('child_process');
+  const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+  const convo = messages
+    .filter(m => m.role !== 'system')
+    .map(m => `${m.role === 'user' ? 'Usuário' : 'Assistente'}: ${m.content}`)
+    .join('\n\n');
+  const prompt = `${system}\n\n${convo}\n\nResponda a última mensagem do usuário diretamente, sem preâmbulo.`;
+
+  return new Promise<string>((resolve, reject) => {
+    const { resolveClaudeBin } = require('./claudeBin') as typeof import('./claudeBin');
+    const proc = spawn(resolveClaudeBin(), [
+      '-p', '--output-format', 'json',
+      '--model', config.claudeModel || 'claude-sonnet-5',
+      '--max-turns', '1',
+      '--disallowedTools', 'Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch',
+    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    let out = '';
+    const timer = setTimeout(() => { try { proc.kill('SIGTERM'); } catch {} ; reject(new Error('claude chat timeout')); }, 90_000);
+    proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+    proc.on('error', (e) => { clearTimeout(timer); reject(e); });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(`claude chat exit ${code}`));
+      try {
+        const data = JSON.parse(out);
+        if (data.is_error || !data.result) return reject(new Error('claude chat sem resultado'));
+        resolve(String(data.result).trim());
+      } catch (e) { reject(e as Error); }
+    });
+    proc.stdin.on('error', () => {});
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+  });
+}
+
+async function chatViaLiteLLM(
+  messages: Array<{ role: string; content: string }>,
+  config: Config
+): Promise<string> {
   const url = buildUrl(config);
 
   const payload = {

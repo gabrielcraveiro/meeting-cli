@@ -4,6 +4,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import type { Config } from '../config';
 import type { OrganizeResult, OrganizeOptions } from './organizer';
+import { resolveClaudeBin } from './claudeBin';
 
 // Claude Code headless engine — same style as the poc-automvp runner:
 // spawn the `claude` binary in print mode, prompt via stdin, parse the JSON
@@ -127,7 +128,7 @@ export async function organizeWithClaude(
 function runClaude(args: string[], prompt: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     // cwd = vault, so Grep/Glob default to the notes tree
-    const proc = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(resolveClaudeBin(), args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
 
     let stdout = '';
     let stderr = '';

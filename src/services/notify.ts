@@ -14,15 +14,29 @@ export function isScreenSharing(): boolean {
   return readBridge()?.sharing === true;
 }
 
-export function notifyWindows(title: string, message: string): void {
+/**
+ * @param launchUrl URI de protocolo (ex: obsidian://open?...) aberta ao CLICAR
+ *                  no toast. Sem ela, o clique só dispensa a notificação.
+ */
+export function notifyWindows(title: string, message: string, launchUrl?: string): void {
   if (isScreenSharing()) return;
+
+  // XML manual (em vez do template) porque activationType="protocol" + launch
+  // só existem no elemento <toast> raiz.
+  const launchAttr = launchUrl
+    ? ` activationType="protocol" launch="${escapeXml(launchUrl)}"`
+    : '';
+  const toastXml =
+    `<toast${launchAttr}><visual><binding template="ToastText02">` +
+    `<text id="1">${escapeXml(title)}</text>` +
+    `<text id="2">${escapeXml(message)}</text>` +
+    `</binding></visual></toast>`;
 
   const ps = `
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-$texts = $xml.GetElementsByTagName('text')
-$texts.Item(0).AppendChild($xml.CreateTextNode('${escapePs(title)}')) | Out-Null
-$texts.Item(1).AppendChild($xml.CreateTextNode('${escapePs(message)}')) | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
+$xml.LoadXml('${escapePs(toastXml)}')
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Meeting CLI').Show($toast)
 `.trim();
@@ -39,5 +53,11 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
 }
 
 function escapePs(s: string): string {
-  return s.replace(/'/g, "''").slice(0, 200);
+  return s.replace(/'/g, "''");
+}
+
+function escapeXml(s: string): string {
+  return s.slice(0, 400)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }

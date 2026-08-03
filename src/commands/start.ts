@@ -1308,9 +1308,14 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     });
     s.success({ text: path.basename(notePath) });
 
+    // Clicking the toast opens the note in Obsidian (protocol activation)
+    const vaultName = path.basename(config.vaultPath);
+    const noteRel = path.relative(config.vaultPath, notePath).replace(/\\/g, '/').replace(/\.md$/, '');
+    const obsidianUri = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(noteRel)}`;
     notifyWindows(
       '✅ Nota pronta' + (meetingTitle ? `: ${meetingTitle}` : ''),
-      `${formatTime(Math.round(durationSec))} · ${participants.length > 0 ? participants.slice(0, 4).join(', ') : path.basename(notePath)}`
+      `${formatTime(Math.round(durationSec))} · ${participants.length > 0 ? participants.slice(0, 4).join(', ') : path.basename(notePath)} — clique para abrir`,
+      obsidianUri
     );
 
     cleanup(segmentsDir);
