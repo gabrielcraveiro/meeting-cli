@@ -8,6 +8,8 @@ import { notifyWindows } from '../services/notify';
 import { loadConfig, Config } from '../config';
 import { parseFrontmatter } from '../services/storage';
 import { getUpcomingMeetings, CalendarEvent } from '../services/calendar';
+import { refreshIfStale, search as searchVault } from '../services/vaultIndex';
+import { askVault } from '../services/claudeQuery';
 
 // `meeting daemon` — HTTP bridge for the browser extension AND for the desktop app.
 // Listens on localhost and spawns `meeting start --browser` when the extension
@@ -23,6 +25,8 @@ const SSE_HEARTBEAT_MS = 15_000;
 const CHAT_TIMEOUT_MS = 60_000;
 const QUEUE_POLL_TIMEOUT_MS = 25_000;
 const MEETINGS_CACHE_MS = 5 * 60 * 1000;
+/** Teto do handler /ask — folga sobre o timeout interno do claude (3 min). */
+const ASK_TIMEOUT_MS = 3.5 * 60 * 1000;
 const LOG_BUFFER_MAX = 500;
 /** SGR/CSI sequences — logs go to the app as plain text. */
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -122,6 +126,8 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
   /** Sessions long-polling /internal/chat-queue, released as soon as an item shows up. */
   const queueWaiters = new Set<(items: QueueItem[]) => void>();
   let chatSeq = 0;
+  /** Single-flight de POST /ask — uma pergunta agêntica por vez (custa dinheiro). */
+  let askInFlight = false;
 
   function resetSession(title?: string): void {
     for (const res of [...session.sseTranscript, ...session.sseInsights]) {
@@ -422,6 +428,17 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
         return json(res, 200, { markdown: fs.readFileSync(target, 'utf-8') }, origin);
       }
 
+      // Busca léxica no vault (índice em memória, sem IA e sem custo).
+      case '/search': {
+        const q = (parsed.searchParams.get('q') || '').trim();
+        if (!q) return json(res, 400, { error: 'q obrigatório' }, origin);
+        const config = cfg();
+        if (!config) return json(res, 404, { error: 'config não encontrada' }, origin);
+        const limit = Math.min(50, Math.max(1, parseInt(parsed.searchParams.get('limit') || '20') || 20));
+        refreshIfStale(config);
+        return json(res, 200, { results: searchVault(q, limit) }, origin);
+      }
+
       case '/briefing/today': {
         const config = cfg();
         if (!config) return json(res, 404, { error: 'config não encontrada' }, origin);
@@ -511,6 +528,47 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
         // Empty string is a valid answer: "no context" — ends the 45s finalize window early.
         enqueue({ type: 'context', text: payload.text.trim().slice(0, 8000) });
         return json(res, 200, { ok: true }, origin);
+      }
+
+      // Pergunta agêntica ao vault (motor claude headless). Independe de gravação:
+      // roda com ou sem sessão ativa. UMA por vez — cada chamada custa dinheiro.
+      case '/ask': {
+        const question = typeof payload.question === 'string' ? payload.question.trim() : '';
+        if (!question) return json(res, 400, { error: 'question obrigatória' }, origin);
+        if (askInFlight) return json(res, 409, { error: 'pergunta em andamento' }, origin);
+        const config = cfg();
+        if (!config) return json(res, 404, { error: 'config não encontrada' }, origin);
+
+        askInFlight = true;
+        const startedAt = Date.now();
+        logLine(chalk.cyan(`  ❓ /ask: ${question.slice(0, 120)}`));
+
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          logLine(chalk.yellow(`  ⚠ /ask excedeu ${Math.round(ASK_TIMEOUT_MS / 1000)}s — 504`));
+          json(res, 504, { error: 'pergunta excedeu o tempo limite' }, origin);
+        }, ASK_TIMEOUT_MS);
+
+        try {
+          const answer = await askVault(question, config);
+          const secs = ((Date.now() - startedAt) / 1000).toFixed(1);
+          logLine(chalk.cyan(`  ✓ /ask respondida em ${secs}s — $${answer.costUsd.toFixed(4)} — `
+            + `${answer.sources.length} fonte(s)`));
+          if (settled) return;  // handler já respondeu 504; resposta descartada
+          settled = true;
+          clearTimeout(timer);
+          return json(res, 200, answer, origin);
+        } catch (err) {
+          logLine(chalk.red(`  ✗ /ask falhou: ${(err as Error).message}`));
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          return json(res, 500, { error: (err as Error).message }, origin);
+        } finally {
+          askInFlight = false;
+        }
       }
 
       case '/session/chat': {

@@ -90,6 +90,20 @@ export const SunIcon = ({ size = 16, className }: P) => (
   </svg>
 );
 
+export const SearchIcon = ({ size = 16, className }: P) => (
+  <svg {...base(size)} className={className} aria-hidden>
+    <circle cx="10.8" cy="10.8" r="6.3" />
+    <path d="M15.5 15.5 20 20" />
+  </svg>
+);
+
+export const SparkIcon = ({ size = 16, className }: P) => (
+  <svg {...base(size)} className={className} aria-hidden>
+    <path d="M12 3.6l1.7 4.7 4.7 1.7-4.7 1.7L12 16.4l-1.7-4.7-4.7-1.7 4.7-1.7z" />
+    <path d="M18.4 16.4l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z" />
+  </svg>
+);
+
 export const ExternalIcon = ({ size = 15, className }: P) => (
   <svg {...base(size)} className={className} aria-hidden>
     <path d="M14 4h6v6" />

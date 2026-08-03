@@ -1,6 +1,6 @@
 [package]
 name = "meeting-app"
-version = "0.2.0"
+version = "0.3.0"
 description = "Meeting — notepad de reunião com IA (cliente do meeting daemon)"
 authors = ["Gabriel Craveiro"]
 edition = "2021"

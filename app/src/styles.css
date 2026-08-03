@@ -217,6 +217,314 @@ button:disabled {
   padding: 4px 0 0;
 }
 
+/* barra de busca/pergunta — fica presa no topo enquanto a Home rola */
+
+.search-slot {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 2px 14px 10px;
+  background: linear-gradient(to bottom, var(--cream) 68%, rgba(250, 249, 245, 0));
+}
+
+.searchbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 6px 0 11px;
+  border-radius: 99px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.searchbar:focus-within {
+  border-color: var(--sage-wash-deep);
+  box-shadow: var(--shadow-lift);
+}
+
+.search-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--ink-faint);
+}
+
+.searchbar:focus-within .search-glyph {
+  color: var(--sage-deep);
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+.search-input::placeholder {
+  color: var(--ink-faint);
+}
+
+.search-hint {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.search-clear {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  color: var(--ink-faint);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.search-clear:hover {
+  background: var(--cream-deep);
+  color: var(--ink-soft);
+}
+
+/* resultados da busca léxica */
+
+.results {
+  padding-bottom: 24px;
+  animation: rise 180ms ease both;
+}
+
+.result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px;
+}
+
+.result-item,
+.result-ask {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: var(--r-md);
+  text-align: left;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.result-item:hover {
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.result-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.result-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--serif);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-date {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.result-snippet {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-mute);
+  /* 2 linhas bastam para dar contexto sem virar parede de texto */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.result-snippet mark {
+  background: var(--sage-wash);
+  color: var(--ink);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+/* primeiro item: perguntar à IA */
+
+.result-ask {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-sunken);
+  margin-bottom: 6px;
+}
+
+.result-ask:hover {
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.result-ask.is-primed {
+  border-color: var(--sage-wash-deep);
+  background: var(--sage-wash);
+}
+
+.result-ask-glyph {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+}
+
+.result-ask.is-primed .result-ask-glyph {
+  background: var(--surface);
+}
+
+.result-ask-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-ask-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--sage-deep);
+}
+
+.result-ask-query {
+  font-size: 13px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* resposta da IA */
+
+.answer {
+  padding: 0 14px 28px;
+  animation: rise 180ms ease both;
+}
+
+.answer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.answer-question {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.answer-wait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 14px;
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-mute);
+}
+
+.answer-fail {
+  padding: 14px;
+  border-radius: var(--r-lg);
+  background: #fbf1ee;
+  border: 1px solid #eccfc6;
+}
+
+.answer-fail-msg {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #a4503c;
+}
+
+.answer-retry {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.answer-card {
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.answer-sources .group-label {
+  padding: 0 0 6px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  max-width: 100%;
+  padding: 5px 11px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.chip:hover {
+  background: var(--sage-wash);
+  border-color: var(--sage-wash-deep);
+  color: var(--sage-deep);
+}
+
+.answer-cost {
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
 .briefing {
   margin: 4px 14px 16px;
   overflow: hidden;
@@ -967,10 +1275,13 @@ button:disabled {
 
 .ctx-bar-fill {
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: 99px;
   background: var(--sage);
-  transition: width 900ms linear;
+  /* scaleX em vez de width: anima no compositor, sem relayout por tick */
+  transform-origin: left center;
+  transition: transform 900ms linear;
 }
 
 .ctx-row {

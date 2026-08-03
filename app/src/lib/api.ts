@@ -38,6 +38,26 @@ export function friendlyError(err: unknown): string {
   return 'Algo deu errado. Tente novamente.';
 }
 
+/**
+ * `/ask` tem semântica própria para 409 (fila ocupada) e 504 (timeout do lado
+ * do daemon), então não reaproveita o mapa genérico de `friendlyError`.
+ */
+export function askError(err: unknown): string {
+  if (err instanceof DaemonOfflineError) {
+    return 'Daemon offline — abra o Meeting Daemon para perguntar ao vault.';
+  }
+  if (err instanceof ApiError) {
+    if (err.status === 409) return 'Já existe uma pergunta em andamento — aguarde.';
+    if (err.status === 504) return 'A pergunta passou do tempo limite. Tente de novo.';
+    if (err.status === 400) return 'Pergunta vazia ou inválida.';
+    return `O daemon respondeu ${err.status}.`;
+  }
+  if (err instanceof Error && err.name === 'AbortError') {
+    return 'A pergunta demorou demais (mais de 3 minutos). Tente de novo.';
+  }
+  return 'Não foi possível responder agora. Tente de novo.';
+}
+
 type RequestOptions = {
   method?: 'GET' | 'POST';
   body?: unknown;
@@ -136,6 +156,24 @@ export type NoteSummary = {
   tags: string[];
 };
 
+/** Item de `/search` — busca léxica no vault. */
+export type SearchResult = {
+  file: string;
+  title: string;
+  date: string;
+  snippet: string;
+  score: number;
+};
+
+/** Fonte citada por `/ask`. */
+export type AskSource = { file: string; title: string };
+
+export type AskResponse = {
+  answer: string;
+  sources: AskSource[];
+  costUsd?: number;
+};
+
 export type TranscriptLine = { ts: number; speaker: string; text: string };
 /**
  * Linha de log do daemon (`/daemon/logs`). `at` é epoch ms no contrato atual —
@@ -162,6 +200,28 @@ export const api = {
     ),
 
   briefingToday: () => request<{ markdown: string }>('/briefing/today'),
+
+  /**
+   * Busca léxica no vault. `q` com menos de 1 char faz o daemon responder 400 —
+   * quem chama garante o mínimo (2 chars na UI).
+   */
+  search: (q: string, limit = 20, signal?: AbortSignal) =>
+    request<{ results: SearchResult[] }>(
+      `/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      { timeoutMs: 12000, signal },
+    ).then((r) => r?.results ?? []),
+
+  /**
+   * Pergunta ao vault (RAG + LLM). Pode levar de 30s a ~3min; 409 quando já há
+   * uma pergunta em andamento no daemon, 504 no timeout do lado dele.
+   */
+  ask: (question: string, signal?: AbortSignal) =>
+    request<AskResponse>('/ask', {
+      method: 'POST',
+      body: { question },
+      timeoutMs: 210000,
+      signal,
+    }),
 
   start: (title?: string) =>
     request<unknown>('/start', {

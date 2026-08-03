@@ -40,6 +40,51 @@ antigo (`stdio: 'inherit'`, TUI toma o terminal do daemon).
 - `GET /notes/content?file=<relpath>` → `{ markdown }` (path SEMPRE validado dentro do vault)
 - `GET /briefing/today` → `{ markdown }` ou 404
 
+## Busca & pergunta ao vault (fora de sessão, independe de gravação)
+
+### `GET /search?q=<termo>&limit=20`
+
+Busca léxica instantânea (índice em memória, **sem IA e sem custo**) sobre
+`Meetings/*.md` e `Briefings/*.md`. Indexa `title`, `date`, `participants`, `tags`
+(frontmatter) + corpo sem frontmatter, com peso maior para título/tags e boost de
+recência. Normalização pt-BR: `reuniao` acha `reunião`; termos com 3+ chars também
+casam por prefixo (`autoriz` acha `autorizador`).
+
+```json
+{ "results": [
+  { "file": "Meetings/2026-08-01-1430-daily.md",
+    "title": "Daily do time",
+    "date": "2026-08-01",
+    "snippet": "…trecho de ~160 chars centrado na primeira ocorrência, sem markdown…",
+    "score": 12.481 }
+] }
+```
+
+- `400 { error: 'q obrigatório' }` sem `q`; `404` se não há config.
+- `limit` é clampado em 1..50 (default 20). Resultados ordenados por `score` desc.
+- O índice se reconstrói sozinho quando passam 5 min **ou** quando o mtime de
+  `Meetings/`/`Briefings/` muda — nota nova aparece na busca sem reiniciar o daemon.
+
+### `POST /ask` `{ question }`
+
+Pergunta agêntica ao vault: roda o `claude` headless com tools read-only
+(Read/Grep/Glob) e `cwd` no vault, respondendo em PT-BR com citações.
+**Custa dinheiro** e é lenta (~20-90s).
+
+```json
+{ "answer": "A última reunião registrada foi ... (2026-08-01)",
+  "sources": [ { "file": "Meetings/2026-08-01-1430-daily.md", "title": "2026-08-01-1430-daily" } ],
+  "costUsd": 0.0731 }
+```
+
+- `sources` vem da linha `FONTES: [[nota]] | [[nota]]` que o modelo emite no fim
+  (removida do `answer`), resolvida para paths reais do vault por basename — nomes
+  que não existem em disco são descartados. Fallback: wikilinks no corpo.
+- **Uma pergunta por vez**: chamada concorrente → `409 { error: 'pergunta em andamento' }`.
+- `400` sem `question`; `504` se passar de 3,5 min; `500 { error }` em falha do motor
+  (ex: binário `claude` fora do PATH).
+- Funciona gravando ou não. Início, fim, duração e custo vão para `/daemon/logs`.
+
 ## Sessão ao vivo (só respondem 409 se não gravando)
 
 - `GET /session/transcript/stream` — SSE. Ao conectar: evento `snapshot`

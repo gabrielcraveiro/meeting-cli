@@ -282,7 +282,7 @@ export function NoteSession({ status, onStopped }: Props) {
               <div className="ctx-bar" aria-hidden>
                 <span
                   className="ctx-bar-fill"
-                  style={{ width: `${(contextLeft / CONTEXT_WINDOW_SEC) * 100}%` }}
+                  style={{ transform: `scaleX(${contextLeft / CONTEXT_WINDOW_SEC})` }}
                 />
               </div>
               <div className="ctx-row">

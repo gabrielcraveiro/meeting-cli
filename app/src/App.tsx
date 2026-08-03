@@ -2,21 +2,27 @@ import { useEffect, useRef, useState } from 'react';
 import { TitleBar } from './components/TitleBar';
 import { useDaemonLauncher } from './hooks/useDaemonLauncher';
 import { useStatus } from './hooks/useStatus';
+import { useVaultSearch, type VaultView } from './hooks/useVaultSearch';
 import type { NoteSummary } from './lib/api';
 import { DaemonScreen } from './screens/DaemonScreen';
 import { Home } from './screens/Home';
 import { NoteReader } from './screens/NoteReader';
 import { NoteSession } from './screens/NoteSession';
 
+/**
+ * `from` no leitor guarda a origem dentro da Home (lista normal, resultados de
+ * busca ou resposta da IA) para que "voltar" reencontre a mesma tela.
+ */
 type Route =
   | { name: 'home' }
   | { name: 'session' }
   | { name: 'daemon' }
-  | { name: 'reader'; note: NoteSummary };
+  | { name: 'reader'; note: NoteSummary; from: VaultView };
 
 export default function App() {
   const { status, offline, loading } = useStatus();
   const launcher = useDaemonLauncher(offline, loading);
+  const search = useVaultSearch();
   const [route, setRoute] = useState<Route>({ name: 'home' });
   const wasRecording = useRef(false);
   /** já vimos gravação/finalização desde que entramos na sessão? */
@@ -58,7 +64,8 @@ export default function App() {
           status={status}
           offline={offline}
           launcher={launcher}
-          onOpenNote={(note) => setRoute({ name: 'reader', note })}
+          search={search}
+          onOpenNote={(note, from) => setRoute({ name: 'reader', note, from })}
           onEnterSession={() => setRoute({ name: 'session' })}
           onOpenDaemon={() => setRoute({ name: 'daemon' })}
         />
@@ -75,7 +82,13 @@ export default function App() {
         />
       )}
       {route.name === 'reader' && (
-        <NoteReader note={route.note} onBack={() => setRoute({ name: 'home' })} />
+        <NoteReader
+          note={route.note}
+          onBack={() => {
+            search.restore(route.from);
+            setRoute({ name: 'home' });
+          }}
+        />
       )}
     </div>
   );
