@@ -60,9 +60,13 @@ fn open_https(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Caminho absoluto do binário `meeting` dentro do WSL. O `fnm` não está no
-/// PATH do bash não-interativo, então o atalho/tray/app sempre chamam o
-/// caminho completo (ver commit "caminho absoluto do meeting no tray/atalho").
+/// Caminhos absolutos dentro do WSL. O `fnm` não está no PATH de shells
+/// não-interativos E o shebang `#!/usr/bin/env node` do `meeting` falha pelo
+/// mesmo motivo — por isso invocamos o node explicitamente com o cli.js
+/// (o symlink `bin/meeting` aponta para ele; o node o segue).
+#[cfg(target_os = "windows")]
+const WSL_NODE_BIN: &str =
+    "/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/node";
 #[cfg(target_os = "windows")]
 const WSL_MEETING_BIN: &str =
     "/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/meeting";
@@ -87,7 +91,7 @@ fn spawn_daemon_headless() -> Result<(), String> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     std::process::Command::new("wsl.exe")
-        .args(["-e", WSL_MEETING_BIN, "daemon", "--headless"])
+        .args(["-e", WSL_NODE_BIN, WSL_MEETING_BIN, "daemon", "--headless"])
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

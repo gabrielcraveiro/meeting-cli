@@ -33,8 +33,9 @@ $tray.Icon = $iconOffline
 $tray.Text = 'Meeting CLI — daemon offline'
 $tray.Visible = $true
 
-# Caminho absoluto — `meeting` vive no bin do fnm, que só entra no PATH do fish;
-# bash de login via wsl.exe não o enxerga.
+# Caminhos absolutos — fnm fora do PATH de shells não-interativos, e o shebang
+# `#!/usr/bin/env node` do `meeting` falha pelo mesmo motivo: node explícito.
+$nodeBin = '/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/node'
 $meetingBin = '/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/meeting'
 
 function Start-Daemon {
@@ -42,9 +43,9 @@ function Start-Daemon {
     # continua funcionando; o tray só faz o clique por você.
     $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
     if ($wt) {
-        Start-Process wt.exe -ArgumentList 'wsl.exe', '-e', $meetingBin, 'daemon'
+        Start-Process wt.exe -ArgumentList 'wsl.exe', '-e', $nodeBin, $meetingBin, 'daemon'
     } else {
-        Start-Process wsl.exe -ArgumentList '-e', $meetingBin, 'daemon'
+        Start-Process wsl.exe -ArgumentList '-e', $nodeBin, $meetingBin, 'daemon'
     }
 }
 
