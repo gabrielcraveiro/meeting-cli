@@ -257,4 +257,12 @@ export const api = {
       // o daemon avisa que pode levar 5-15s; damos folga
       timeoutMs: 60000,
     }),
+
+  /** Enhance ao vivo (Granola durante a call): prévia das notas aprimoradas. */
+  enhance: () =>
+    request<{ markdown: string }>('/session/enhance', {
+      method: 'POST',
+      body: {},
+      timeoutMs: 125000,
+    }),
 };

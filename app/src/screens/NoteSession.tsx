@@ -237,6 +237,31 @@ export function NoteSession({ status, onStopped }: Props) {
   const showContextForm = finalizing && !contextDone && !contextExpired;
   const showFinalizing = finalizing && (contextDone || contextExpired);
 
+  // ---------------------------------------------- enhance ao vivo (Granola)
+  const [enhanced, setEnhanced] = useState<string | null>(null);
+  const [enhancing, setEnhancing] = useState(false);
+  const [showEnhanced, setShowEnhanced] = useState(false);
+
+  const runEnhance = async () => {
+    if (enhancing) return;
+    flushLines(true);  // linhas ainda não enviadas entram no esqueleto
+    setEnhancing(true);
+    setError(null);
+    try {
+      const r = await api.enhance();
+      setEnhanced(r.markdown);
+      setShowEnhanced(true);
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.status === 409
+          ? 'Nenhuma gravação ativa para aprimorar.'
+          : friendlyError(err),
+      );
+    } finally {
+      setEnhancing(false);
+    }
+  };
+
   return (
     <div className={`screen session ${showTranscript ? 'with-transcript' : ''}`}>
       <div className="session-main">
@@ -245,6 +270,14 @@ export function NoteSession({ status, onStopped }: Props) {
           <div className="session-status">
             <span className="rec-dot" aria-hidden />
             <span className="rec-time">{finalizing ? 'finalizando…' : elapsed}</span>
+            <button
+              className={`btn-enhance ${showEnhanced ? 'is-on' : ''}`}
+              onClick={() => (showEnhanced ? setShowEnhanced(false) : void runEnhance())}
+              disabled={enhancing || finalizing}
+              title={showEnhanced ? 'Voltar às suas notas' : 'Aprimorar notas com o transcript até agora'}
+            >
+              {enhancing ? '…' : showEnhanced ? 'Minhas notas' : '✨ Aprimorar'}
+            </button>
             <button
               className="btn-stop"
               onClick={stop}
@@ -283,17 +316,29 @@ export function NoteSession({ status, onStopped }: Props) {
           </div>
         )}
 
-        <textarea
-          ref={taRef}
-          className="notepad"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          onBlur={onBlur}
-          placeholder="Anote o que importa. Cada linha guia a nota final."
-          spellCheck
-          autoFocus
-        />
+        {showEnhanced && enhanced !== null ? (
+          <div className="enhanced-view">
+            <div className="enhanced-tag">
+              <span>✨ Prévia aprimorada — suas notas cruas continuam intactas</span>
+              <button className="enhanced-refresh" onClick={runEnhance} disabled={enhancing}>
+                {enhancing ? 'atualizando…' : 'atualizar'}
+              </button>
+            </div>
+            <Markdown source={enhanced} className="prose-editorial" />
+          </div>
+        ) : (
+          <textarea
+            ref={taRef}
+            className="notepad"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            onBlur={onBlur}
+            placeholder="Anote o que importa. Cada linha guia a nota final."
+            spellCheck
+            autoFocus
+          />
+        )}
 
         <div className="session-foot">
           {cards.length > 0 && (

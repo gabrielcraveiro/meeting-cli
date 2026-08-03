@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Instala o briefing matinal no crontab do WSL (8h, seg-sex).
+# Instala o briefing matinal no crontab do WSL (7h40, seg-sex).
 #
 # Por que caminho absoluto: o fnm nao entra no PATH de shells nao-interativos,
 # entao o cron nao encontraria `meeting` nem `node`. Usamos o binario da versao
@@ -13,7 +13,7 @@
 set -euo pipefail
 
 MEETING_BIN="/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/meeting"
-SCHEDULE="0 8 * * 1-5"
+SCHEDULE="40 7 * * 1-5"
 MARKER="# meeting-cli briefing matinal"
 LOG="$HOME/.local/state/meeting-cli/briefing.log"
 CRON_LINE="$SCHEDULE $MEETING_BIN briefing --quiet >> $LOG 2>&1 $MARKER"
@@ -52,7 +52,7 @@ if current_crontab | grep -Fq "$MARKER"; then
 fi
 
 { current_crontab; echo "$CRON_LINE"; } | crontab -
-echo "Briefing matinal agendado: $SCHEDULE (seg-sex, 8h)"
+echo "Briefing matinal agendado: $SCHEDULE (seg-sex, 7h40)"
 echo "  comando: $MEETING_BIN briefing --quiet"
 echo "  log:     $LOG"
 echo ""

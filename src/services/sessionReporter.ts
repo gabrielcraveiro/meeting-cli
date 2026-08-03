@@ -9,6 +9,7 @@ export interface ReportedLine { ts: number; speaker: string; text: string }
 
 export type QueueItem =
   | { type: 'chat'; id: string; message: string }
+  | { type: 'enhance'; id: string }
   | { type: 'note'; ts: number; text: string }
   | { type: 'context'; text: string };
 

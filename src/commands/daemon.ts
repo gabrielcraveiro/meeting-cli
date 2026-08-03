@@ -23,6 +23,7 @@ import { askVault } from '../services/claudeQuery';
 const DEFAULT_PORT = 7899;
 const SSE_HEARTBEAT_MS = 15_000;
 const CHAT_TIMEOUT_MS = 60_000;
+const ENHANCE_TIMEOUT_MS = 120_000;
 const QUEUE_POLL_TIMEOUT_MS = 25_000;
 const MEETINGS_CACHE_MS = 5 * 60 * 1000;
 /** Teto do handler /ask — folga sobre o timeout interno do claude (3 min). */
@@ -47,6 +48,7 @@ interface Stamped { ts: number; text: string }
 /** Item awaiting delivery to the recording session via /internal/chat-queue. */
 type QueueItem =
   | { type: 'chat'; id: string; message: string }
+  | { type: 'enhance'; id: string }
   | { type: 'note'; ts: number; text: string }
   | { type: 'context'; text: string };
 
@@ -588,6 +590,26 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
         const timer = setTimeout(() => deliver(null), CHAT_TIMEOUT_MS);
         pendingChats.set(id, { deliver, timer });
         enqueue({ type: 'chat', id, message });
+        return;
+      }
+
+      case '/session/enhance': {
+        // Enhance ao vivo (fluxo Granola durante a call): a sessão pega as
+        // anotações do usuário + transcript até agora e devolve a prévia
+        // aprimorada. Mesma mecânica request/reply do chat.
+        if (!child) return json(res, 409, { error: 'não gravando' }, origin);
+        const id = `e${++chatSeq}-${Date.now()}`;
+        let settled = false;
+        const deliver = (reply: string | null) => {
+          if (settled) return;
+          settled = true;
+          pendingChats.delete(id);
+          if (reply === null) return json(res, 504, { error: 'sessão não respondeu no tempo' }, origin);
+          return json(res, 200, { markdown: reply }, origin);
+        };
+        const timer = setTimeout(() => deliver(null), ENHANCE_TIMEOUT_MS);
+        pendingChats.set(id, { deliver, timer });
+        enqueue({ type: 'enhance', id });
         return;
       }
 

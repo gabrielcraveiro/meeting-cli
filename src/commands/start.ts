@@ -831,7 +831,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
           contextAnswered = true;
         } else if (item.type === 'note') {
           userNotes.push({ ts: item.ts, text: item.text });
-        } else if (item.type === 'chat') {
+        } else if (item.type === 'chat' || item.type === 'enhance') {
           reportChatReply(item.id, 'A reunião está sendo finalizada — a nota estará disponível em instantes.');
         }
       }
@@ -1614,6 +1614,32 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
             // Pode chegar antes do finalize (usuário pré-digitou) — guardamos.
             appContext = item.text.trim();
             ui.appendLine(chalk.magenta('  + Contexto extra recebido do app'));
+            continue;
+          }
+          if (item.type === 'enhance') {
+            // Enhance ao vivo (fluxo Granola): anotações do usuário = esqueleto,
+            // transcript até agora = músculo. Prévia — a nota final continua
+            // sendo gerada no finalize com o pipeline completo.
+            try {
+              const notesBlock = userNotes.length > 0
+                ? userNotes.map(n => `- [${formatTime(n.ts)}] ${n.text}`).join('\n')
+                : '(o usuário ainda não anotou nada)';
+              const reply = await chatWithMeetings([
+                { role: 'system', content: buildSystemMsg() },
+                { role: 'user', content:
+                  `Aprimore as anotações do usuário AGORA, no meio da reunião (fluxo Granola).\n\n` +
+                  `# Anotações do usuário (esqueleto — mantenha a ordem e a intenção)\n${notesBlock}\n\n` +
+                  `Instruções:\n` +
+                  `- Expanda CADA anotação com o que a transcrição diz sobre aquele ponto (contexto, quem falou, decisões, números).\n` +
+                  `- Depois, uma seção "## Outros pontos até agora" com o que ele não anotou (máx 5 bullets).\n` +
+                  `- Markdown limpo e conciso — é uma prévia durante a call, não a nota final.\n` +
+                  `- Responda APENAS com o markdown.` },
+              ], config);
+              reportChatReply(item.id, reply);
+              ui.appendLine(chalk.gray('  ✨ enhance ao vivo gerado pro app'));
+            } catch (err) {
+              reportChatReply(item.id, `Erro no enhance: ${(err as Error).message}`);
+            }
             continue;
           }
           // Chat do app: mesmo caminho do chat do TUI (buildSystemMsg + chatWithMeetings)
