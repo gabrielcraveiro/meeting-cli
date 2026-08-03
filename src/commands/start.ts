@@ -24,7 +24,10 @@ const DEEPGRAM_PER_MIN = 0.0077;  // nova-3 + diarization, single-pass
 const SEGMENT_SECONDS = 45;
 const WARN_SECONDS = 30 * 60;
 const HARD_STOP_SECONDS = 60 * 60;
-const INSIGHT_INTERVAL_MS = 3 * 60 * 1000;
+// Auto-insights adaptativos: dispara quando a conversa rendeu material novo
+const INSIGHT_MIN_NEW_LINES = 6;            // linhas novas p/ disparo "quente"
+const INSIGHT_MIN_GAP_MS = 75 * 1000;       // piso entre insights
+const INSIGHT_MAX_GAP_MS = 4 * 60 * 1000;   // teto: gotejamento mesmo com pouco conteúdo
 // Headless: janela em que o app pode enviar o contexto pós-reunião (POST /session/context)
 const APP_CONTEXT_WAIT_MS = 45_000;
 
@@ -1714,11 +1717,23 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
 
   startPolling();
 
-  // Auto-insights: first at 2min, then every 3min
-  setTimeout(() => {
-    runAutoInsight();
-    insightInterval = setInterval(runAutoInsight, INSIGHT_INTERVAL_MS);
-  }, 2 * 60 * 1000);
+  // Auto-insights guiados por CONTEÚDO, não por relógio fixo: conversa quente
+  // recebe insight cedo, reunião parada não gasta chamada. O relógio só entra
+  // como teto (gotejamento lento) e piso (não metralhar).
+  let lastInsightAt = startTime;
+  function maybeRunInsight(): void {
+    if (insightBusy || stopping || paused) return;
+    const newLines = transcriptLines.length - lastInsightLineCount;
+    if (newLines <= 0) return;
+    const sinceMs = Date.now() - lastInsightAt;
+    const hot = newLines >= INSIGHT_MIN_NEW_LINES && sinceMs >= INSIGHT_MIN_GAP_MS;
+    const drip = sinceMs >= INSIGHT_MAX_GAP_MS;  // pouco conteúdo, mas faz tempo
+    if (hot || drip) {
+      lastInsightAt = Date.now();
+      void runAutoInsight();
+    }
+  }
+  insightInterval = setInterval(maybeRunInsight, 5000);
 
   // ── Input handling via TUI ──
   // The new TUI uses raw stdin internally (InputHandler) — no readline needed.

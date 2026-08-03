@@ -196,19 +196,23 @@ export async function chatWithMeetings(
   messages: Array<{ role: string; content: string }>,
   config: Config
 ): Promise<string> {
+  // Com o engine claude configurado, o claude é o motor PRIMÁRIO do caminho
+  // rápido (haiku: segundos, funciona em qualquer rede) e o LiteLLM corporativo
+  // vira fallback — inverso do desenho original, que prendia chat/insights à VPN.
+  if (config.organizerEngine === 'claude') {
+    try {
+      return await chatViaClaude(messages, config);
+    } catch (err) {
+      try {
+        return await chatViaLiteLLM(messages, config);
+      } catch {
+        throw err;  // erro do claude é o mais relevante nesse arranjo
+      }
+    }
+  }
   try {
     return await chatViaLiteLLM(messages, config);
   } catch (err) {
-    // LiteLLM é corporativo (VPN) — fora dela, o chat ao vivo e os insights
-    // morriam. Com o engine claude configurado, degradamos para uma chamada
-    // local `claude -p` sem tools: mais lenta, mas funciona em qualquer rede.
-    if (config.organizerEngine === 'claude') {
-      try {
-        return await chatViaClaude(messages, config);
-      } catch {
-        throw err;  // erro original do LiteLLM é mais informativo
-      }
-    }
     throw err;
   }
 }
@@ -229,7 +233,8 @@ function chatViaClaude(
     const { resolveClaudeBin } = require('./claudeBin') as typeof import('./claudeBin');
     const proc = spawn(resolveClaudeBin(), [
       '-p', '--output-format', 'json',
-      '--model', config.claudeModel || 'claude-sonnet-5',
+      // Caminho rápido: haiku responde em segundos — sonnet fica pros passes profundos
+      '--model', config.claudeModelQuick || 'claude-haiku-4-5-20251001',
       '--max-turns', '1',
       '--disallowedTools', 'Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch',
     ], { stdio: ['pipe', 'pipe', 'pipe'] });

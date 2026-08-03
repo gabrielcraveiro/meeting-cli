@@ -20,7 +20,9 @@ export interface Config {
   // Note organization engine: 'chat' (default, single LiteLLM completion) or
   // 'claude' (Claude Code CLI headless with read-only vault research tools)
   organizerEngine?: 'chat' | 'claude';
-  claudeModel?: string;  // model for the claude engine (default: claude-sonnet-5)
+  claudeModel?: string;  // model for deep passes: final note, briefing, /ask (default: claude-sonnet-5)
+  // Fast lane (live chat, insights, live enhance) — small model, seconds not minutes
+  claudeModelQuick?: string;  // default: claude-haiku-4-5-20251001
   // Final transcript source for browser-bridge sessions:
   // 'auto' (default) — Teams captions when rich (real names, covers local mic), Deepgram otherwise
   // 'captions' — always prefer captions when present; 'deepgram' — never use captions as transcript
