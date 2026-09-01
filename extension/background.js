@@ -50,6 +50,17 @@ browser.runtime.onMessage.addListener(async (msg, sender) => {
       return { ok: !!result };
     }
 
+    case 'CAPTIONS_STALE': {
+      const result = await post('/captions-stale', { sinceSec: msg.sinceSec || 0 });
+      return { ok: !!result };
+    }
+
+    case 'TITLE_CHANGED': {
+      if (!msg.title) return { ok: true };
+      const result = await post('/title', { title: msg.title });
+      return { ok: !!result };
+    }
+
     case 'SHARING': {
       const result = await post('/sharing', { active: !!msg.active });
       return { ok: !!result };

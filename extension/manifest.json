@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Meeting CLI Bridge",
-  "version": "0.2.0",
+  "version": "0.2.10",
   "description": "Detecta calls do Microsoft Teams e aciona o meeting-cli para gravar, transcrever e organizar notas automaticamente.",
   "browser_specific_settings": {
     "gecko": {
@@ -14,7 +14,9 @@
     "http://127.0.0.1:7899/*"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "content_scripts": [
     {
@@ -23,7 +25,9 @@
         "https://teams.live.com/*",
         "https://teams.cloud.microsoft/*"
       ],
-      "js": ["content-teams.js"],
+      "js": [
+        "content-teams.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }

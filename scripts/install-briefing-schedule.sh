@@ -13,10 +13,13 @@
 set -euo pipefail
 
 MEETING_BIN="/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/meeting"
+# O shim `meeting` tem shebang `#!/usr/bin/env node` — e o cron NAO tem node no
+# PATH (fnm). Invocar o node explicitamente e o unico jeito que funciona no cron.
+NODE_BIN="/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/node"
 SCHEDULE="40 7 * * 1-5"
 MARKER="# meeting-cli briefing matinal"
 LOG="$HOME/.local/state/meeting-cli/briefing.log"
-CRON_LINE="$SCHEDULE $MEETING_BIN briefing --quiet >> $LOG 2>&1 $MARKER"
+CRON_LINE="$SCHEDULE $NODE_BIN $MEETING_BIN briefing --quiet >> $LOG 2>&1 $MARKER"
 
 current_crontab() {
   crontab -l 2>/dev/null || true

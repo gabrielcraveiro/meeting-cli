@@ -19,6 +19,7 @@
   const SPEECH_FLUSH_MS = 10000; // send spans to daemon
   const START_CONFIRM_POLLS = 1; // hangup button present for N+1 polls → call started
   const END_CONFIRM_POLLS = 2;   // absent for N+1 polls → call ended (survives re-renders)
+  const CAPTION_ALIVE_MS = 30000; // legenda recente = call viva, mesmo sem botão de desligar
 
   const SEL = {
     HANGUP: [
@@ -39,6 +40,16 @@
     TURN_ON_CAPTIONS: "div[id='closed-captions-button']",
     // Screen sharing (self) — "stop sharing" only exists while YOU present
     STOP_SHARING: "[data-tid='stop-sharing-button'], button[data-tid='call-control-stop-sharing'], [data-tid='screen-share-stop-button']",
+    // Sinais de call viva FORA da tela de call: navegar pro chat do Teams com a
+    // call rolando esconde o botão de desligar, mas a mini-janela/monitor fica.
+    // ATENÇÃO: o painel de LEGENDAS fica de fora — o Teams mantém o nó montado
+    // depois da call, e tê-lo aqui criava sessão eterna (3 calls + silêncio
+    // numa nota de 88min). Legendas ativas já seguram via lastCaptionAt (30s).
+    CALL_ALIVE: [
+      "[data-tid='call-monitor']",
+      "[data-tid='call-monitor-v2']",
+      "[data-tid='call-duration']",
+    ].join(','),
     // Roster
     ROSTER_ITEM: "[data-tid^='participantsInCall-']",
     ROSTER_NAME: "[id^='roster-avatar-img-']",
@@ -53,11 +64,15 @@
 
   // Speech timeline state
   let speechSpans = [];        // finalized spans {who, start, end} (secs since call start)
+  let lastCaptionAt = 0;       // última vez que o painel de legendas tinha conteúdo
+  let lastCaptionsRecovery = 0; // última rodada do watchdog de legendas mortas
 
   let lastFlushedCount = 0;
   let captionsEnableAttempts = 0;
   let lastEnableAttempt = 0;
   let sharingActive = false;
+  let callTitle = '';        // título da call atual — muda = trocou de reunião
+  let titleChangePolls = 0;  // confirmação (2 polls) pra ignorar flicker de título
 
   const SHARING_LABELS = /(stop (sharing|presenting)|parar de (compartilhar|apresentar))/i;
 
@@ -76,6 +91,12 @@
   function findHangupButton() {
     const el = document.querySelector(SEL.HANGUP);
     if (el) return el;
+    // Fallback por aria-label é ambíguo: o Calendário tem "Sair" (da reunião/
+    // série do convite) sem call nenhuma. Só vale acompanhado de outro sinal
+    // de call ativa (duração/monitor/legendas/toolbar de chamada).
+    const inCallContext =
+      document.querySelector(SEL.CALL_ALIVE) || document.querySelector(SEL.PEOPLE_BUTTON);
+    if (!inCallContext) return null;
     for (const btn of document.querySelectorAll('button[aria-label]')) {
       if (HANGUP_LABELS.test(btn.getAttribute('aria-label').trim())) return btn;
     }
@@ -84,21 +105,47 @@
 
   // ── Title ───────────────────────────────────────────────────
 
-  function getCallTitle() {
+  /** Título vindo SÓ de elementos da call — confiável para detectar troca de
+   * reunião. Inclui o mini-monitor (call-monitor-title), que segue mostrando o
+   * título real quando o usuário navega pro chat com a call rolando. */
+  function getCallTitleFromDom() {
     const el =
       document.querySelector('[data-tid="call-title"]') ||
       document.querySelector('[data-tid="calling-header-title"]') ||
+      document.querySelector('[data-tid="call-monitor-title"]') ||
       document.querySelector('h1[id*="meeting"], h2[id*="meeting"]');
-    if (el && el.textContent.trim()) return el.textContent.trim();
+    return el && el.textContent.trim() ? el.textContent.trim() : '';
+  }
 
-    // document.title looks like "(3) Calendar | Nome da Reunião | Microsoft Teams"
+  function getCallTitle() {
+    const dom = getCallTitleFromDom();
+    if (dom) return dom;
+
+    // document.title looks like "(3) Calendar | Nome da Reunião | Microsoft Teams".
+    // ATENÇÃO: reuniões podem ter "|" no PRÓPRIO nome ("Arquitetura | Bots | Data")
+    // — pegar o último segmento truncava o título. Remove só o prefixo de view
+    // conhecido e preserva o resto inteiro.
     let t = document.title
       .replace(/^\(\d+\)\s*/, '')
       .replace(/\s*[|,–-]\s*Microsoft Teams.*$/i, '')
       .trim();
     const segments = t.split('|').map((s) => s.trim()).filter(Boolean);
-    if (segments.length > 1) t = segments[segments.length - 1];
+    const VIEW_NAMES = /^(chat|calendar|calend[aá]rio|activity|atividade|teams|equipes|calls?|chamadas?|files|arquivos|community|comunidade)$/i;
+    while (segments.length > 1 && VIEW_NAMES.test(segments[0])) segments.shift();
+    t = segments.join(' | ');
     return t && !/^microsoft teams$/i.test(t) ? t : '';
+  }
+
+  // O Teams usa o nome de quem fala/está fixado como título da aba em vários
+  // estados da call — um "título" que bate com participante conhecido é pessoa,
+  // não reunião. Comparação frouxa: um contém o outro (título pode vir truncado).
+  function isParticipantName(title) {
+    const t = title.toLowerCase();
+    const all = [...sentParticipants, ...speechSpans.map((s) => s.who)];
+    return all.some((p) => {
+      const n = p.toLowerCase();
+      return n === t || n.includes(t) || t.includes(n);
+    });
   }
 
   // ── Roster scraping ─────────────────────────────────────────
@@ -162,19 +209,37 @@
   // virtualização do Teams seguir renderizando/atualizando as mensagens.
   const HIDE_STYLE_ID = 'meeting-cli-hide-captions';
   function hideCaptionsPanel() {
-    if (document.getElementById(HIDE_STYLE_ID)) return;
-    if (!captionsVisible()) return;
-    const style = document.createElement('style');
-    style.id = HIDE_STYLE_ID;
-    style.textContent =
-      "[data-tid='closed-caption-v2-window-wrapper'], [data-tid='closed-captions-renderer'] {" +
-      ' opacity: 0 !important; pointer-events: none !important; user-select: none !important; }';
-    document.head.appendChild(style);
-    console.log('[meeting-cli] painel de legendas ocultado (captura segue ativa)');
+    if (!document.getElementById(HIDE_STYLE_ID)) {
+      const style = document.createElement('style');
+      style.id = HIDE_STYLE_ID;
+      // height/max-height 0 (não display:none): o elemento continua NO layout
+      // engine e o React do Teams segue atualizando as legendas — nós só
+      // tiramos o espaço que ele ocupava na tela da call.
+      style.textContent =
+        "[data-tid='closed-caption-v2-window-wrapper'], [data-tid='closed-captions-renderer']," +
+        ' [data-meeting-cli-hide] {' +
+        ' opacity: 0 !important; pointer-events: none !important; user-select: none !important;' +
+        ' height: 0 !important; max-height: 0 !important; min-height: 0 !important;' +
+        ' padding: 0 !important; margin: 0 !important; overflow: hidden !important; }';
+      document.head.appendChild(style);
+    }
+    // O Teams recria E às vezes renomeia o container das legendas entre
+    // re-renders — regra estática só nos data-tids conhecidos deixa variantes
+    // novas visíveis. Marcamos o container VIVO a cada ciclo: recriações
+    // reaparecem por no máximo um tick do sampler (2s) e somem de novo.
+    const el = document.querySelector(SEL.CAPTIONS_RENDERER);
+    if (el && !el.hasAttribute('data-meeting-cli-hide')) {
+      const win = el.closest("[data-tid*='closed-caption'][data-tid*='window']") || el;
+      win.setAttribute('data-meeting-cli-hide', '1');
+      console.log('[meeting-cli] painel de legendas ocultado (captura segue ativa)');
+    }
   }
 
   function unhideCaptionsPanel() {
     document.getElementById(HIDE_STYLE_ID)?.remove();
+    document
+      .querySelectorAll('[data-meeting-cli-hide]')
+      .forEach((el) => el.removeAttribute('data-meeting-cli-hide'));
   }
 
   // Click chain: More → Language & speech → Turn on captions.
@@ -232,8 +297,10 @@
 
   function sampleCaptions() {
     if (!inCall) return;
+    hideCaptionsPanel();  // ciclo de 2s: re-oculta o painel se o Teams o recriou
     const snapshot = getCaptionSnapshot();
     if (snapshot.length === 0) return;
+    lastCaptionAt = Date.now();
     const t = Math.round((Date.now() - callStartMs) / 1000);
 
     if (speechSpans.length === 0) {
@@ -293,19 +360,81 @@
         callStartMs = Date.now();
         sentParticipants = new Set();
         speechSpans = [];
+        lastCaptionAt = 0;
+        lastCaptionsRecovery = 0;
 
         lastFlushedCount = 0;
         captionsEnableAttempts = 0;
         lastEnableAttempt = 0;
         const participants = scrapeParticipants();
         participants.forEach((p) => sentParticipants.add(p));
-        send('CALL_STARTED', { title: getCallTitle(), participants });
-        console.log('[meeting-cli] call started:', getCallTitle());
+        callTitle = getCallTitle();
+        titleChangePolls = 0;
+        send('CALL_STARTED', { title: callTitle, participants });
+        console.log('[meeting-cli] call started:', callTitle);
         setTimeout(openPeoplePanel, 1500);   // force roster to load
         setTimeout(tryEnableCaptions, 4000); // captions → speaker timeline
       } else if (inCall) {
+        // Troca de reunião SEM sair da tela de call: o botão de desligar nunca
+        // some, mas o título muda. Confirmado por 3 polls (~15s) contra flicker,
+        // encerramos a call antiga — o próximo ciclo re-entra como call nova.
+        // SÓ o elemento da tela de call conta aqui: o document.title muda quando
+        // o usuário navega pra outro chat com a call rolando (nome do chat) e
+        // pelo nome de quem fala — nenhum dos dois é troca de reunião.
+        // Sufixo entre parênteses NÃO diferencia reunião: o Teams alterna
+        // "Reunião (Externo)" ↔ "Reunião" no mesmo call — comparar cru fatiava.
+        const baseTitle = (t) => t.replace(/\s*\([^)]*\)\s*$/, '').trim().toLowerCase();
+        const nowTitle = getCallTitleFromDom();
+        if (nowTitle && callTitle && baseTitle(nowTitle) === baseTitle(callTitle) && nowTitle !== callTitle) {
+          callTitle = nowTitle;  // variante do mesmo título — só adota a mais recente
+          titleChangePolls = 0;
+        } else if (nowTitle && callTitle && baseTitle(nowTitle) !== baseTitle(callTitle)) {
+          if (isParticipantName(nowTitle)) {
+            // Falso título (nome de pessoa). Se o atual também era nome de
+            // pessoa e nada melhor apareceu, mantém; nunca conta como troca.
+            titleChangePolls = 0;
+          } else if (isParticipantName(callTitle)) {
+            // Estávamos com nome de pessoa como título e o título real da
+            // reunião apareceu — adota sem encerrar a sessão.
+            console.log('[meeting-cli] título corrigido:', callTitle, '→', nowTitle);
+            callTitle = nowTitle;
+            titleChangePolls = 0;
+            send('TITLE_CHANGED', { title: callTitle });
+          } else {
+            titleChangePolls++;
+            if (titleChangePolls >= 3) {
+              console.log('[meeting-cli] troca de reunião:', callTitle, '→', nowTitle);
+              flushSpeech();
+              unhideCaptionsPanel();
+              send('CALL_ENDED', {});
+              inCall = false;
+              presentPolls = 0;
+              titleChangePolls = 0;
+              return;
+            }
+          }
+        } else {
+          titleChangePolls = 0;
+        }
         tryEnableCaptions();
         hideCaptionsPanel();  // assim que o painel existir, some da tela
+
+        // Watchdog de legendas: estamos NA TELA da call (hangup presente) mas
+        // sem fala nova há 60s+. captionsVisible() não detecta legendas
+        // DESLIGADAS (o Teams mantém o painel montado) — só a ausência de
+        // conteúdo novo detecta. A cada 5min: reabre o ciclo de auto-enable
+        // (as 3 tentativas zeram) e avisa o daemon pra alertar o usuário.
+        {
+          const nowMs = Date.now();
+          const captionAge = lastCaptionAt ? nowMs - lastCaptionAt : nowMs - callStartMs;
+          if (captionAge > 60000 && nowMs - lastCaptionsRecovery > 5 * 60000) {
+            lastCaptionsRecovery = nowMs;
+            captionsEnableAttempts = 0;
+            lastEnableAttempt = 0;
+            send('CAPTIONS_STALE', { sinceSec: Math.round(captionAge / 1000) });
+            console.log('[meeting-cli] legendas sem atividade há', Math.round(captionAge / 1000), 's — reabrindo auto-enable');
+          }
+        }
         const sharing = isSharing();
         if (sharing !== sharingActive) {
           sharingActive = sharing;
@@ -320,6 +449,16 @@
           console.log('[meeting-cli] roster +', fresh.join(', '));
         }
       }
+    } else if (
+      inCall &&
+      (document.querySelector(SEL.CALL_ALIVE) ||
+        (lastCaptionAt && Date.now() - lastCaptionAt < CAPTION_ALIVE_MS))
+    ) {
+      // Sem botão de desligar, mas a call segue viva em segundo plano — o
+      // usuário navegou pro chat do Teams (mini-janela/monitor presente, ou
+      // legendas chegando há <30s). Não é fim de call; segura o contador.
+      presentPolls = 0;
+      absentPolls = 0;
     } else {
       presentPolls = 0;
       if (inCall) {
