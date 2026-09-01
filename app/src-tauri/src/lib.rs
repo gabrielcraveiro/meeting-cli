@@ -60,16 +60,74 @@ fn open_https(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Caminhos absolutos dentro do WSL. O `fnm` não está no PATH de shells
-/// não-interativos E o shebang `#!/usr/bin/env node` do `meeting` falha pelo
-/// mesmo motivo — por isso invocamos o node explicitamente com o cli.js
-/// (o symlink `bin/meeting` aponta para ele; o node o segue).
+/// Resolve os binários `node` e `meeting` DENTRO do WSL em runtime — nada de
+/// path hardcoded (era o bloqueador nº 1 pra distribuir o app: os caminhos
+/// eram da máquina do autor). Estratégia, com cache por processo:
+///   1. login shell (`bash -lc`): carrega o profile do usuário (fnm/nvm/apt
+///      entram no PATH) e pergunta `command -v meeting && command -v node`;
+///   2. fallback: glob no layout do fnm (`~/.local/share/fnm/node-versions/
+///      */installation/bin/meeting`), node = irmão no mesmo diretório.
+/// Invocamos o node explicitamente com o script `meeting` porque o shebang
+/// `#!/usr/bin/env node` falha em shells não-interativos sem o PATH do fnm.
 #[cfg(target_os = "windows")]
-const WSL_NODE_BIN: &str =
-    "/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/node";
+fn resolve_wsl_bins() -> Result<(String, String), String> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Result<(String, String), String>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            if let Some(pair) = probe_wsl(&[
+                "-e", "bash", "-lc",
+                "command -v meeting && command -v node",
+            ]) {
+                return Ok(pair);
+            }
+            if let Some(pair) = probe_fnm_glob() {
+                return Ok(pair);
+            }
+            Err("não encontrei `meeting`/`node` no WSL — instale com: npm i -g @gabrielcraveiro/meeting-cli".into())
+        })
+        .clone()
+}
+
+/// Roda wsl.exe capturando stdout; espera duas linhas (meeting, node).
 #[cfg(target_os = "windows")]
-const WSL_MEETING_BIN: &str =
-    "/home/gabriel/.local/share/fnm/node-versions/v24.13.0/installation/bin/meeting";
+fn probe_wsl(args: &[&str]) -> Option<(String, String)> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let out = std::process::Command::new("wsl.exe")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines().map(str::trim).filter(|l| l.starts_with('/'));
+    let meeting = lines.next()?.to_string();
+    let node = lines.next()?.to_string();
+    Some((node, meeting))
+}
+
+#[cfg(target_os = "windows")]
+fn probe_fnm_glob() -> Option<(String, String)> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let out = std::process::Command::new("wsl.exe")
+        .args([
+            "-e", "bash", "-c",
+            "ls -1 \"$HOME\"/.local/share/fnm/node-versions/*/installation/bin/meeting 2>/dev/null | tail -1",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    let meeting = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !meeting.starts_with('/') {
+        return None;
+    }
+    let node = format!("{}/node", meeting.rsplit_once('/')?.0);
+    Some((node, meeting))
+}
 
 /// Sobe o daemon do meeting-cli SEM terminal (`--headless`): o app é o dono da
 /// UI agora, e o log ao vivo aparece na tela "Daemon" via `/daemon/logs`.
@@ -90,8 +148,9 @@ fn spawn_daemon_headless() -> Result<(), String> {
     // sobrevive ao processo pai.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+    let (node, meeting) = resolve_wsl_bins()?;
     std::process::Command::new("wsl.exe")
-        .args(["-e", WSL_NODE_BIN, WSL_MEETING_BIN, "daemon", "--headless"])
+        .args(["-e", &node, &meeting, "daemon", "--headless"])
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -115,6 +174,56 @@ fn spawn_daemon_headless() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Reinicia o daemon via `meeting daemon restart` — o CLI cuida do ciclo
+/// inteiro (SIGTERM no antigo, spawn destacado do novo, espera o /status).
+/// Bloqueante por alguns segundos, por isso roda em spawn_blocking. Se houver
+/// gravação em andamento o CLI recusa e a mensagem chega ao app como erro.
+#[tauri::command]
+async fn restart_daemon() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(restart_daemon_blocking)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(target_os = "windows")]
+fn restart_daemon_blocking() -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let (node, meeting) = resolve_wsl_bins()?;
+    let out = std::process::Command::new("wsl.exe")
+        .args(["-e", &node, &meeting, "daemon", "restart"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+    collect_restart_output(out)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn restart_daemon_blocking() -> Result<String, String> {
+    let out = std::process::Command::new("meeting")
+        .args(["daemon", "restart"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    collect_restart_output(out)
+}
+
+fn collect_restart_output(out: std::process::Output) -> Result<String, String> {
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = text.trim().to_string();
+    if out.status.success() {
+        Ok(text)
+    } else if text.is_empty() {
+        Err(format!("meeting daemon restart falhou (exit {:?})", out.status.code()))
+    } else {
+        Err(text)
+    }
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.unminimize();
@@ -126,13 +235,52 @@ fn show_main(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Instância única: relançar o app (ou ativar um deep link com ele já
+        // aberto) foca a janela existente em vez de abrir outra. Com a feature
+        // "deep-link", a URL da segunda invocação chega ao plugin deep-link.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        // Autostart no login: o app é o "interruptor" da gravação automática
+        // (autoRecordRequiresApp) e vive no tray — sem ele aberto pós-reboot,
+        // calls eram silenciosamente ignoradas.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             open_obsidian,
             open_https,
-            start_daemon_headless
+            start_daemon_headless,
+            restart_daemon
         ])
         .setup(|app| {
+            // meeting:// — notificações do daemon abrem o APP na nota (em vez
+            // do Obsidian). register_all cobre dev/execução sem instalador; o
+            // NSIS registra o protocolo na instalação.
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+            }
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |_event| {
+                    // o front roteia pra nota; aqui só garantimos a janela visível
+                    show_main(&handle);
+                });
+            }
+
+            // Garante o autostart habilitado (idempotente; usuário pode
+            // desabilitar nas Configurações de Inicializar do Windows).
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let _ = app.autolaunch().enable();
+            }
+
             let open = MenuItemBuilder::with_id("open", "Abrir").build(app)?;
             let daemon = MenuItemBuilder::with_id("daemon", "Iniciar daemon").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Sair").build(app)?;

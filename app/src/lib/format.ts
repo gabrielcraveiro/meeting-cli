@@ -33,7 +33,12 @@ function startOfDay(d: Date): Date {
 
 function parseLooseDate(value: string): Date | null {
   if (!value) return null;
-  // "2026-08-03" ou "2026-08-03 14:30" ou ISO completo
+  // "2026-08-04" SEM hora: new Date() interpretaria como UTC-meia-noite, que
+  // no fuso -03 vira o dia ANTERIOR às 21h — "ontem" aparecia como "2 dias".
+  // Data pura é montada por componentes = local.
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (ymd) return new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
+  // "2026-08-03 14:30" ou ISO completo
   const iso = value.includes('T') ? value : value.replace(' ', 'T');
   const d = new Date(iso);
   if (!Number.isNaN(d.getTime())) return d;

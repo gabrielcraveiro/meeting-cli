@@ -123,7 +123,7 @@ export function useVaultSearch(): VaultSearch {
     setAnswerError(null);
     setAsking(true);
     api
-      .ask(q, ctrl.signal)
+      .ask(q, undefined, ctrl.signal)
       .then((res) => {
         if (ctrl.signal.aborted) return;
         setAnswer({ ...res, sources: res.sources ?? [] });

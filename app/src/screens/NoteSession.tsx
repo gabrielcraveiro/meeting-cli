@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CloseIcon, SendIcon, StopIcon, WaveIcon } from '../components/Icons';
+import { BackIcon, CloseIcon, SendIcon, StopIcon, WaveIcon } from '../components/Icons';
 import { Markdown } from '../components/Markdown';
 import { TranscriptPanel } from '../components/TranscriptPanel';
-import { ApiError, api, friendlyError, type Insight, type Status } from '../lib/api';
+import { ApiError, api, friendlyError, type Insight, type OpenTask, type Status } from '../lib/api';
 import { mmss } from '../lib/format';
 import { subscribeSse } from '../lib/sse';
 
@@ -21,6 +21,7 @@ const INSIGHT_KINDS: Record<string, { label: string; cls: string }> = {
   risco: { label: 'risco', cls: 'kind-risco' },
   pendencia: { label: 'pendência', cls: 'kind-risco' },
   info: { label: 'info', cls: 'kind-info' },
+  pergunta: { label: 'pergunte', cls: 'kind-pergunta' },
 };
 
 function parseInsight(text: string): { kind?: { label: string; cls: string }; body: string } {
@@ -35,13 +36,22 @@ function parseInsight(text: string): { kind?: { label: string; cls: string }; bo
 type Props = {
   status: Status | null;
   onStopped: () => void;
+  /** volta pra Home SEM parar a gravação — a sessão vive no daemon */
+  onBack: () => void;
+  /** abre a tela de Tarefas (a gravação continua; a pill traz de volta) */
+  onOpenTasks: () => void;
 };
 
 const DRAFT_KEY = 'meeting.notepad.draft';
 /** janela do daemon para receber contexto extra depois do stop */
 const CONTEXT_WINDOW_SEC = 45;
+/** Guardrail: chips de insight na tela têm teto — os antigos saem por baixo
+ * (continuam na nota final, que vem do daemon, não daqui). */
+const MAX_INSIGHTS = 40;
+/** Guardrail: cards de resposta do chat da sessão também não acumulam sem fim. */
+const MAX_CARDS = 10;
 
-export function NoteSession({ status, onStopped }: Props) {
+export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
   const [draft, setDraft] = useState(() => sessionStorage.getItem(DRAFT_KEY) ?? '');
   const [showTranscript, setShowTranscript] = useState(false);
   const [cards, setCards] = useState<Card[]>([]);
@@ -124,12 +134,22 @@ export function NoteSession({ status, onStopped }: Props) {
         const fresh = incoming
           .filter((i) => i && typeof i.text === 'string' && !seen.has(insightKey(i)))
           .map((i) => ({ id: insightKey(i), ts: i.ts, text: i.text }));
-        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+        return fresh.length > 0 ? [...prev, ...fresh].slice(-MAX_INSIGHTS) : prev;
       });
 
     const stop = subscribeSse('/session/insights/stream', {
       events: {
-        snapshot: (data) => merge(((data as { insights?: Insight[] })?.insights) ?? []),
+        // Snapshot é o estado COMPLETO da sessão atual — substitui, não mescla.
+        // Mesclar deixava insights da call anterior na tela quando uma call
+        // emendava na outra (o stream reconecta na sessão nova, snapshot vazio).
+        snapshot: (data) => {
+          const incoming = ((data as { insights?: Insight[] })?.insights) ?? [];
+          setInsights(
+            incoming
+              .filter((i) => i && typeof i.text === 'string')
+              .map((i) => ({ id: insightKey(i), ts: i.ts, text: i.text })),
+          );
+        },
         insight: (data) => merge([data as Insight]),
       },
     });
@@ -138,33 +158,63 @@ export function NoteSession({ status, onStopped }: Props) {
 
   const visibleInsights = insights.filter((i) => !dismissedInsights.has(i.id));
 
+  // Call longa gera dezenas de chips e o editor afunda — colapsado mostra só
+  // os mais recentes; o contador expande a lista completa (rolável).
+  const INSIGHTS_COLLAPSED = 5;
+  const [insightsExpanded, setInsightsExpanded] = useState(false);
+  const shownInsights = insightsExpanded
+    ? visibleInsights
+    : visibleInsights.slice(-INSIGHTS_COLLAPSED);
+  const hiddenInsights = visibleInsights.length - shownInsights.length;
+
   // ------------------------------------------------------- chat
 
-  const ask = async () => {
-    const msg = question.trim();
+  /** Envia uma pergunta ao chat da sessão. `label` é o que aparece no card
+   * (útil pra perguntas prontas, tipo o resumo dos últimos 5 min). */
+  const askMessage = async (msg: string, label?: string) => {
     if (!msg || asking) return;
     const id = `q-${Date.now()}`;
-    setQuestion('');
+    const tag = label ?? msg;
     setAsking(true);
-    setCards((prev) => [...prev, { kind: 'pending', id, question: msg }]);
+    setCards((prev) => [...prev, { kind: 'pending', id, question: tag } as Card].slice(-MAX_CARDS));
     try {
       const { reply } = await api.chat(msg);
       setCards((prev) =>
         prev.map((c) =>
-          c.id === id ? { kind: 'reply', id, question: msg, text: reply } : c,
+          c.id === id ? { kind: 'reply', id, question: tag, text: reply } : c,
         ),
       );
     } catch (err) {
       setCards((prev) =>
         prev.map((c) =>
           c.id === id
-            ? { kind: 'reply', id, question: msg, text: `_${friendlyError(err)}_` }
+            ? { kind: 'reply', id, question: tag, text: `_${friendlyError(err)}_` }
             : c,
         ),
       );
     } finally {
       setAsking(false);
     }
+  };
+
+  const ask = async () => {
+    const msg = question.trim();
+    if (!msg) return;
+    setQuestion('');
+    await askMessage(msg);
+  };
+
+  /** Resumo pronto: recap objetivo dos últimos ~5 minutos da call. */
+  const recapRecent = () => {
+    const now = status?.elapsedSec ?? 0;
+    const from = Math.max(0, now - 300);
+    void askMessage(
+      `Resuma objetivamente o que foi discutido nos últimos 5 minutos da call ` +
+        `(aproximadamente de [${mmss(from)}] até [${mmss(now)}]): temas, decisões e ` +
+        `pontos importantes, citando quem falou. Máximo 5 bullets. ` +
+        `Se o trecho foi trivial, diga em uma frase.`,
+      'Resumo dos últimos 5 min',
+    );
   };
 
   const dismiss = (id: string) => setCards((prev) => prev.filter((c) => c.id !== id));
@@ -241,42 +291,196 @@ export function NoteSession({ status, onStopped }: Props) {
   const [enhanced, setEnhanced] = useState<string | null>(null);
   const [enhancing, setEnhancing] = useState(false);
   const [showEnhanced, setShowEnhanced] = useState(false);
+  const enhancingRef = useRef(false);
+  /** relógio do auto-enhance — parte do mount pra 1ª rodada vir aos 10 min */
+  const lastEnhanceAt = useRef(Date.now());
 
-  const runEnhance = async () => {
-    if (enhancing) return;
+  const runEnhance = async (opts?: { auto?: boolean }) => {
+    if (enhancingRef.current) return;
+    enhancingRef.current = true;
     flushLines(true);  // linhas ainda não enviadas entram no esqueleto
     setEnhancing(true);
-    setError(null);
+    if (!opts?.auto) setError(null);
     try {
       const r = await api.enhance();
       setEnhanced(r.markdown);
-      setShowEnhanced(true);
+      lastEnhanceAt.current = Date.now();
+      if (!opts?.auto) setShowEnhanced(true);
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.status === 409
-          ? 'Nenhuma gravação ativa para aprimorar.'
-          : friendlyError(err),
-      );
+      // auto-refresh falho é silencioso — a próxima rodada tenta de novo
+      if (!opts?.auto) {
+        setError(
+          err instanceof ApiError && err.status === 409
+            ? 'Nenhuma gravação ativa para aprimorar.'
+            : friendlyError(err),
+        );
+      }
     } finally {
+      enhancingRef.current = false;
       setEnhancing(false);
     }
   };
+
+  // Auto-enhance a cada 10 min de gravação: a prévia rica fica sempre fresca
+  // sem clique. Atualiza em segundo plano; quem está vendo a prévia ganha a
+  // reescrita animada (efeito de digitação abaixo).
+  const AUTO_ENHANCE_MS = 10 * 60_000;
+  const recording = !!status?.recording && !finalizing;
+  useEffect(() => {
+    if (!recording) return;
+    const id = window.setInterval(() => {
+      if (Date.now() - lastEnhanceAt.current >= AUTO_ENHANCE_MS) {
+        void runEnhance({ auto: true });
+      }
+    }, 30_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording]);
+
+  // Efeito de digitação: a cada versão nova da prévia (manual ou automática),
+  // o texto se reescreve progressivamente. typedLen === null → texto completo.
+  const [typedLen, setTypedLen] = useState<number | null>(null);
+  useEffect(() => {
+    if (!showEnhanced || enhanced === null) { setTypedLen(null); return; }
+    setTypedLen(0);
+    const total = enhanced.length;
+    const step = Math.max(6, Math.round(total / 160)); // ~5s do início ao fim
+    const id = window.setInterval(() => {
+      setTypedLen((v) => {
+        if (v === null) return null;
+        const next = v + step;
+        if (next >= total) { clearInterval(id); return null; }
+        return next;
+      });
+    }, 30);
+    return () => clearInterval(id);
+  }, [enhanced, showEnhanced]);
+
+  // -------------------------------------------- prep → esqueleto do notepad
+  // Se existe nota de prep pra ESTA reunião e o notepad está vazio, a pauta
+  // sugerida vira o ponto de partida das suas anotações — e como as linhas do
+  // notepad guiam a nota final, a pauta planejada estrutura a nota. Nunca
+  // sobrescreve texto seu; só preenche vazio, uma vez por sessão.
+  useEffect(() => {
+    if (sessionStorage.getItem(DRAFT_KEY)?.trim()) return;
+    let alive = true;
+    const t = window.setTimeout(() => {
+      api
+        .sessionPrep()
+        .then((r) => {
+          if (!alive) return;
+          const pauta = r.markdown.match(/## Sugest[aã]o de pauta\s*\n+([\s\S]*?)(?=\n## |\n---|\s*$)/i)?.[1];
+          if (!pauta?.trim()) return;
+          const bullets = pauta
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => l.startsWith('-'))
+            .slice(0, 6);
+          if (bullets.length === 0) return;
+          setDraft((prev) => (prev.trim() ? prev : `Pauta (do prep):\n${bullets.join('\n')}\n\n`));
+        })
+        .catch(() => {}); // sem prep = sem esqueleto, segue vazio
+    }, 4000); // espera o título da sessão assentar no daemon
+    return () => { alive = false; clearTimeout(t); };
+  }, [status?.sessionKey]);
+
+  // --------------------------------------------------- pauta sugerida da call
+  // Cruza quem está NA call com as pendências abertas do vault ("Giovani está
+  // aqui e deve X"). Busca aos 45s (roster já populado) e re-tenta aos 2min se
+  // veio vazio (gente ainda entrando). Dispensável com um clique.
+  type Pauta = {
+    context: string | null;
+    tasks: OpenTask[];
+    related: Array<{ file: string; title: string; date: string }>;
+  };
+  const [pauta, setPauta] = useState<Pauta | null>(null);
+  const [pautaDismissed, setPautaDismissed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setPauta(null);
+    setPautaDismissed(false);
+    const fetchPauta = async (): Promise<boolean> => {
+      try {
+        const r = await api.sessionPauta();
+        if (!alive) return false;
+        if (r.context || r.tasks.length > 0 || r.related.length > 0) {
+          setPauta(r);
+          return true;
+        }
+      } catch {
+        // sem pauta não é erro — só não mostra o card
+      }
+      return false;
+    };
+    const t1 = window.setTimeout(() => {
+      void fetchPauta().then((ok) => {
+        if (!ok && alive) {
+          window.setTimeout(() => { void fetchPauta(); }, 75_000);
+        }
+      });
+    }, 45_000);
+    return () => { alive = false; clearTimeout(t1); };
+  }, [status?.sessionKey]);
+
+  // ------------------------------------------- virada de sessão (call → call)
+  // Quando uma call emenda na outra, esta tela NÃO desmonta — o daemon troca a
+  // sessão por baixo (sessionKey muda). Tudo que é "desta call" reseta aqui;
+  // os insights se resolvem via snapshot do SSE (stream reconecta e substitui).
+  // O rascunho do notepad fica: anotação do usuário não some sozinha.
+  const sessionKeyRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const key = status?.sessionKey;
+    if (key === undefined) return;
+    if (sessionKeyRef.current !== undefined && key !== sessionKeyRef.current) {
+      setCards([]);
+      setDismissedInsights(new Set());
+      setEnhanced(null);
+      setShowEnhanced(false);
+      setContextDone(false);
+      setContextLeft(CONTEXT_WINDOW_SEC);
+      setContextNote(null);
+      setAwaitingNote(false);
+      sentRef.current = new Set();
+    }
+    sessionKeyRef.current = key;
+  }, [status?.sessionKey]);
 
   return (
     <div className={`screen session ${showTranscript ? 'with-transcript' : ''}`}>
       <div className="session-main">
         <header className="session-head">
+          <button
+            className="btn-ghost session-back"
+            onClick={() => {
+              flushLines(true); // linhas do notepad não podem ficar presas
+              onBack();
+            }}
+            title="Voltar pra Home (a gravação continua)"
+            aria-label="Voltar (gravação continua)"
+          >
+            <BackIcon />
+          </button>
           <h1 className="session-title">{status?.title || 'Nota sem título'}</h1>
           <div className="session-status">
             <span className="rec-dot" aria-hidden />
             <span className="rec-time">{finalizing ? 'finalizando…' : elapsed}</span>
             <button
               className={`btn-enhance ${showEnhanced ? 'is-on' : ''}`}
-              onClick={() => (showEnhanced ? setShowEnhanced(false) : void runEnhance())}
-              disabled={enhancing || finalizing}
-              title={showEnhanced ? 'Voltar às suas notas' : 'Aprimorar notas com o transcript até agora'}
+              onClick={() => {
+                if (showEnhanced) { setShowEnhanced(false); return; }
+                // versão em cache aparece na hora; se está velha, renova por trás
+                if (enhanced !== null) {
+                  setShowEnhanced(true);
+                  if (Date.now() - lastEnhanceAt.current > 2 * 60_000) void runEnhance({ auto: true });
+                } else {
+                  void runEnhance();
+                }
+              }}
+              disabled={(enhancing && enhanced === null) || finalizing}
+              title={showEnhanced ? 'Voltar às suas notas' : 'Aprimorar notas com o transcript até agora (auto a cada 10 min)'}
             >
-              {enhancing ? '…' : showEnhanced ? 'Minhas notas' : '✨ Aprimorar'}
+              {enhancing && enhanced === null ? '…' : showEnhanced ? 'Minhas notas' : '✨ Aprimorar'}
             </button>
             <button
               className="btn-stop"
@@ -291,9 +495,67 @@ export function NoteSession({ status, onStopped }: Props) {
 
         {error && <p className="session-error">{error}</p>}
 
+        {pauta !== null && !pautaDismissed && (
+          <div className="pauta-card" role="note" aria-label="Pauta sugerida">
+            <div className="pauta-head">
+              <span className="pauta-title">💡 Pra esta call</span>
+              <button
+                className="card-dismiss"
+                onClick={() => setPautaDismissed(true)}
+                aria-label="Dispensar pauta sugerida"
+              >
+                <CloseIcon size={12} />
+              </button>
+            </div>
+            {pauta.context && (
+              <div className="pauta-context">
+                {pauta.context.split('\n').map((l, i) => {
+                  const t = l.trim();
+                  return t ? <p key={i}>{t.replace(/^-\s*/, '• ')}</p> : null;
+                })}
+              </div>
+            )}
+            {pauta.tasks.length > 0 && (
+              <ul className="pauta-list">
+                {pauta.tasks.slice(0, 5).map((t) => (
+                  <li key={`${t.file}|${t.line}`}>
+                    {t.owner ? <strong>{t.owner}: </strong> : <strong>você: </strong>}
+                    {t.text}
+                    {t.due && <span className="pauta-due"> · 📅 {t.due}</span>}
+                  </li>
+                ))}
+                {pauta.tasks.length > 5 && (
+                  <li className="pauta-more">
+                    <button className="pauta-link" onClick={onOpenTasks}>
+                      +{pauta.tasks.length - 5} pendências — ver Tarefas →
+                    </button>
+                  </li>
+                )}
+              </ul>
+            )}
+            {pauta.related.length > 0 && (
+              <p className="pauta-related">
+                Reuniões anteriores: {pauta.related.map((r) => r.title).join(' · ')}
+              </p>
+            )}
+          </div>
+        )}
+
         {visibleInsights.length > 0 && (
-          <div className="insights-strip" aria-label="Insights da reunião">
-            {visibleInsights.map((i) => {
+          <div
+            className={`insights-strip ${insightsExpanded ? 'is-expanded' : ''}`}
+            aria-label="Insights da reunião"
+          >
+            {(hiddenInsights > 0 || insightsExpanded) && (
+              <button
+                className="insight-more"
+                onClick={() => setInsightsExpanded((v) => !v)}
+                aria-expanded={insightsExpanded}
+              >
+                {insightsExpanded ? '− recolher' : `+${hiddenInsights} anteriores`}
+              </button>
+            )}
+            {shownInsights.map((i) => {
               const parsed = parseInsight(i.text);
               return (
                 <div className="insight-chip" key={i.id} title={`${mmss(i.ts)} — ${parsed.body}`}>
@@ -319,12 +581,18 @@ export function NoteSession({ status, onStopped }: Props) {
         {showEnhanced && enhanced !== null ? (
           <div className="enhanced-view">
             <div className="enhanced-tag">
-              <span>✨ Prévia aprimorada — suas notas cruas continuam intactas</span>
-              <button className="enhanced-refresh" onClick={runEnhance} disabled={enhancing}>
+              <span>✨ Prévia aprimorada — se refaz a cada 10 min; suas notas cruas continuam intactas</span>
+              <button className="enhanced-refresh" onClick={() => void runEnhance()} disabled={enhancing}>
                 {enhancing ? 'atualizando…' : 'atualizar'}
               </button>
             </div>
-            <Markdown source={enhanced} className="prose-editorial" />
+            <div className={typedLen !== null ? 'is-typing' : ''}>
+              <Markdown
+                source={typedLen === null ? enhanced : enhanced.slice(0, typedLen)}
+                className="prose-editorial"
+              />
+              {typedLen !== null && <span className="type-caret" aria-hidden />}
+            </div>
           </div>
         ) : (
           <textarea
@@ -416,6 +684,32 @@ export function NoteSession({ status, onStopped }: Props) {
               {contextNote && <span className="ctx-note">{contextNote}</span>}
             </div>
           ) : (
+            <>
+            <div className="quick-actions">
+              {asking ? (
+                <span className="quick-busy">
+                  <span className="spinner" aria-hidden /> gerando…
+                </span>
+              ) : (
+                <>
+                  <button className="quick-chip" onClick={recapRecent}>
+                    ⏱ Resumo dos últimos 5 min
+                  </button>
+                  <button
+                    className="quick-chip"
+                    onClick={() =>
+                      void askMessage(
+                        'Liste as decisões e combinados fechados até agora nesta call, ' +
+                          'com quem assumiu cada um. Máximo 5 bullets. Se nada foi decidido ainda, diga isso.',
+                        'Decisões até agora',
+                      )
+                    }
+                  >
+                    ✓ Decisões até agora
+                  </button>
+                </>
+              )}
+            </div>
             <div className="askbar">
               <button
                 className={`btn-wave ${showTranscript ? 'is-on' : ''}`}
@@ -443,6 +737,7 @@ export function NoteSession({ status, onStopped }: Props) {
                 <SendIcon />
               </button>
             </div>
+            </>
           )}
         </div>
       </div>

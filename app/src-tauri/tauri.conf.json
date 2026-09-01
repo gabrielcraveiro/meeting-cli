@@ -3,6 +3,13 @@
   "productName": "Meeting",
   "version": "0.3.0",
   "identifier": "com.gabrielcraveiro.meeting",
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["meeting"]
+      }
+    }
+  },
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -15,6 +22,7 @@
       {
         "label": "main",
         "title": "Meeting",
+        "backgroundThrottling": "disabled",
         "width": 400,
         "height": 600,
         "minWidth": 340,

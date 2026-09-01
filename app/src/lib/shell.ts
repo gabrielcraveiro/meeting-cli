@@ -23,3 +23,12 @@ export async function openHttps(url: string): Promise<void> {
 export async function startDaemonHeadless(): Promise<void> {
   await invoke('start_daemon_headless');
 }
+
+/**
+ * Reinicia o daemon (`meeting daemon restart` no WSL). Bloqueia até o novo
+ * processo responder /status (~2-10s) e devolve o output do CLI. Se houver
+ * gravação em andamento, rejeita com a mensagem de proteção do CLI.
+ */
+export async function restartDaemon(): Promise<string> {
+  return await invoke<string>('restart_daemon');
+}

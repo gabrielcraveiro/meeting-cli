@@ -134,10 +134,26 @@ export type Phase = 'idle' | 'recording' | 'finalizing';
 
 export type Status = {
   recording: boolean;
+  /** Pausa global: quando true, calls detectadas pela extensão não são gravadas. */
+  recordingPaused?: boolean;
   title?: string;
+  /** Identidade da sessão no daemon — muda a cada call (troca emendada inclusive). */
+  sessionKey?: number;
   elapsedSec?: number;
   sharing: boolean;
   phase: Phase;
+};
+
+export type OpenTask = {
+  file: string;
+  line: string;
+  text: string;
+  owner?: string;
+  /** true = tarefa do próprio usuário (sem dono ou dono = config.userName) */
+  mine: boolean;
+  due?: string;
+  noteTitle: string;
+  noteDate: string;
 };
 
 export type Meeting = {
@@ -145,6 +161,8 @@ export type Meeting = {
   startIso: string;
   endIso: string;
   attendees: string[];
+  /** nota da reunião casada por horário, quando a call foi gravada */
+  note?: { file: string; title: string } | null;
 };
 
 export type NoteSummary = {
@@ -174,6 +192,10 @@ export type AskResponse = {
   costUsd?: number;
 };
 
+/** Turno de conversa enviado como contexto em follow-ups de `/ask` (máx. 12
+ * itens aceitos pelo daemon). */
+export type ChatTurn = { role: 'user' | 'assistant'; content: string };
+
 export type TranscriptLine = { ts: number; speaker: string; text: string };
 /**
  * Linha de log do daemon (`/daemon/logs`). `at` é epoch ms no contrato atual —
@@ -190,6 +212,10 @@ export const api = {
     request<Status>('/status', { timeoutMs: 4000, signal }),
 
   meetingsToday: () => getWithRetry<Meeting[]>('/meetings/today'),
+
+  /** Agenda de um dia específico (navegação ‹ › na Home), com nota por evento. */
+  meetingsForDay: (date: string) =>
+    getWithRetry<Meeting[]>(`/meetings/today?date=${encodeURIComponent(date)}`),
 
   notesRecent: (limit = 20) =>
     getWithRetry<NoteSummary[]>(`/notes/recent?limit=${limit}`),
@@ -212,15 +238,82 @@ export const api = {
     ).then((r) => r?.results ?? []),
 
   /**
-   * Pergunta ao vault (RAG + LLM). Pode levar de 30s a ~3min; 409 quando já há
-   * uma pergunta em andamento no daemon, 504 no timeout do lado dele.
+   * Pergunta ao vault. mode 'fast' (default) = RAG numa chamada só (~5-10s);
+   * 'deep' = claude agêntico pesquisando o vault (~40s+, mais minucioso).
+   * 409 quando já há uma pergunta em andamento no daemon, 504 no timeout dele.
    */
-  ask: (question: string, signal?: AbortSignal) =>
+  ask: (question: string, history?: ChatTurn[], signal?: AbortSignal, mode: 'fast' | 'deep' = 'fast') =>
     request<AskResponse>('/ask', {
       method: 'POST',
-      body: { question },
+      body: {
+        question,
+        mode,
+        ...(history && history.length > 0 ? { history } : {}),
+      },
       timeoutMs: 210000,
       signal,
+    }),
+
+  /** Prep da reunião atual — vira o esqueleto inicial do notepad. 404 = sem prep. */
+  sessionPrep: () =>
+    request<{ file: string; markdown: string }>('/session/prep', { timeoutMs: 15000 }),
+
+  /** Pauta da call ao vivo: "fio da meada" do tema + pendências topicais + notas relacionadas. */
+  sessionPauta: () =>
+    request<{
+      context: string | null;
+      tasks: OpenTask[];
+      related: Array<{ file: string; title: string; date: string }>;
+    }>('/session/pauta', { timeoutMs: 30000 }),
+
+  /** Notas macro por tema (Temas/) + sugestões de cluster. Só leitura local. */
+  topics: () =>
+    request<{
+      topics: Array<{ file: string; title: string; updated: string; sources: number }>;
+      suggestions: Array<{ topic: string; notes: number }>;
+    }>('/topics', { timeoutMs: 20000 }),
+
+  /** Gera/atualiza a nota macro de um tema (1 chamada de modelo, incremental). */
+  topicBuild: (topic: string) =>
+    request<{ file: string; added: number; skipped: boolean }>('/topics/build', {
+      method: 'POST',
+      body: { topic },
+      timeoutMs: 180000,
+    }),
+
+  /** Salva o markdown editado de uma nota (escrita atômica no daemon). */
+  noteSave: (file: string, markdown: string) =>
+    request<{ ok: boolean }>('/notes/save', {
+      method: 'POST',
+      body: { file, markdown },
+      timeoutMs: 20000,
+    }),
+
+  /** Move uma nota pra .trash/ do vault (recuperável no Obsidian). */
+  noteDelete: (file: string) =>
+    request<{ ok: boolean }>('/notes/delete', {
+      method: 'POST',
+      body: { file },
+      timeoutMs: 15000,
+    }),
+
+  /** Corrige um termo em TODAS as ocorrências de uma nota (retro-fix do glossário). */
+  noteReplace: (file: string, from: string, to: string) =>
+    request<{ ok: boolean; replaced: number }>('/notes/replace', {
+      method: 'POST',
+      body: { file, from, to },
+      timeoutMs: 15000,
+    }),
+
+  /** Action items abertos agregados de todas as notas de reunião. */
+  tasksOpen: () => request<{ tasks: OpenTask[] }>('/tasks/open', { timeoutMs: 20000 }),
+
+  /** Conclui uma tarefa (flip `- [ ]` → `- [x] ✅ hoje` na nota de origem). */
+  taskClose: (file: string, line: string) =>
+    request<{ ok: boolean }>('/tasks/close', {
+      method: 'POST',
+      body: { file, line },
+      timeoutMs: 15000,
     }),
 
   start: (title?: string) =>
@@ -230,7 +323,19 @@ export const api = {
       timeoutMs: 20000,
     }),
 
-  stop: () => request<unknown>('/stop', { method: 'POST', timeoutMs: 30000 }),
+  // Pausa global de gravação automática. Persiste no daemon (sobrevive a
+  // restart) — nenhuma call detectada pela extensão é gravada enquanto pausado.
+  setRecordingPaused: (paused: boolean) =>
+    request<{ ok: boolean; recordingPaused: boolean }>('/recording-toggle', {
+      method: 'POST',
+      body: { paused },
+      timeoutMs: 15000,
+    }),
+
+  // reason 'user' marca cancelamento manual: o daemon não regrava esta call
+  // se a extensão redetectá-la (você parou de propósito, continua na reunião).
+  stop: () =>
+    request<unknown>('/stop', { method: 'POST', body: { reason: 'user' }, timeoutMs: 30000 }),
 
   postSessionNote: (text: string) =>
     request<{ ok: boolean; ts: number }>('/session/notes', {
@@ -256,6 +361,17 @@ export const api = {
       body: { message },
       // o daemon avisa que pode levar 5-15s; damos folga
       timeoutMs: 60000,
+    }),
+
+  /**
+   * Glossário de correções (meeting-glossario.md no vault): "termo errado" →
+   * "forma correta", aplicado a toda transcrição dali em diante.
+   */
+  glossaryAdd: (from: string, to: string) =>
+    request<{ ok: boolean; entries: Array<{ from: string; to: string }> }>('/glossary', {
+      method: 'POST',
+      body: { from, to },
+      timeoutMs: 8000,
     }),
 
   /** Enhance ao vivo (Granola durante a call): prévia das notas aprimoradas. */

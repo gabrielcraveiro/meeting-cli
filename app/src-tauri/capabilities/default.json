@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissões da janela principal: controles próprios (frameless) + opener.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -12,6 +14,8 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-close",
-    "opener:default"
+    "opener:default",
+    "deep-link:default",
+    "autostart:default"
   ]
 }

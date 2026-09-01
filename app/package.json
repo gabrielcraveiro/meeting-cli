@@ -16,6 +16,7 @@
   "dependencies": {
     "@fontsource/source-serif-4": "^5.1.0",
     "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-deep-link": "^2.4.9",
     "dompurify": "^3.4.12",
     "marked": "^14.1.3",
     "react": "^18.3.1",

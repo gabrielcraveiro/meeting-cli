@@ -27,6 +27,33 @@ export const ChevronIcon = ({ size = 16, className }: P) => (
   </svg>
 );
 
+export const MoonIcon = ({ size = 16, className }: P) => (
+  <svg {...base(size)} className={className} aria-hidden>
+    <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8z" />
+  </svg>
+);
+
+export const PencilIcon = ({ size = 16, className }: P) => (
+  <svg {...base(size)} className={className} aria-hidden>
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+  </svg>
+);
+
+export const LayersIcon = ({ size = 16, className }: P) => (
+  <svg {...base(size)} className={className} aria-hidden>
+    <path d="M12 3l8 4.5-8 4.5-8-4.5L12 3z" />
+    <path d="M4 12l8 4.5 8-4.5M4 16.5L12 21l8-4.5" />
+  </svg>
+);
+
+export const ChecklistIcon = ({ size = 16, className }: P) => (
+  <svg {...base(size)} className={className} aria-hidden>
+    <path d="M3.5 5.5l1.5 1.5 3-3M3.5 12l1.5 1.5 3-3M3.5 18.5L5 20l3-3" />
+    <path d="M11 6h9M11 12.5h9M11 19h9" />
+  </svg>
+);
+
 export const PlusIcon = ({ size = 16, className }: P) => (
   <svg {...base(size)} className={className} aria-hidden>
     <path d="M12 5v14M5 12h14" />

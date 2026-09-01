@@ -34,10 +34,67 @@
   --shadow-soft: 0 1px 2px rgba(38, 36, 31, 0.04), 0 4px 14px rgba(38, 36, 31, 0.05);
   --shadow-lift: 0 2px 4px rgba(38, 36, 31, 0.05), 0 10px 28px rgba(38, 36, 31, 0.08);
 
+  /* estados (aviso/erro) e detalhes */
+  --warn-bg: #fdf6e7;
+  --warn-border: #f0e3c4;
+  --warn-ink: #7a6636;
+  --danger-bg: #fbf1ee;
+  --danger-border: #eccfc6;
+  --danger-ink: #a4503c;
+  --danger-wash: #f6e6e2;
+  --danger-mid: #c9a08f;
+  --tooltip-bg: #3a3730;
+  --scroll-thumb: rgba(38, 36, 31, 0.13);
+  --scroll-thumb-hover: rgba(38, 36, 31, 0.22);
+  --kind-acao-ink: #47617d;
+  --kind-risco-ink: #8a6432;
+
   /* tipografia */
   --serif: 'Source Serif 4', 'Source Serif Pro', Georgia, 'Times New Roman', serif;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     sans-serif;
+}
+
+/* =========================================================================
+   Dark mode — mesma linguagem, superfícies quentes escuras. Ativado por
+   data-theme="dark" no <html> (toggle na titlebar, persistido).
+   ========================================================================= */
+
+[data-theme='dark'] {
+  --cream: #1d1b17;
+  --cream-deep: #262420;
+  --surface: #2a2823;
+  --surface-sunken: #23211d;
+
+  --line: #37342e;
+  --line-strong: #45413a;
+
+  --ink: #e8e5dd;
+  --ink-soft: #b5b0a4;
+  --ink-mute: #8b8578;
+  --ink-faint: #6a655a;
+
+  --sage: #9db06c;
+  --sage-deep: #b3c584;
+  --sage-wash: #333828;
+  --sage-wash-deep: #414a2f;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 14px rgba(0, 0, 0, 0.22);
+  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.35), 0 10px 28px rgba(0, 0, 0, 0.35);
+
+  --warn-bg: #332c1c;
+  --warn-border: #4a4028;
+  --warn-ink: #d8c187;
+  --danger-bg: #38241f;
+  --danger-border: #57352c;
+  --danger-ink: #e0917b;
+  --danger-wash: #45291f;
+  --danger-mid: #8a5a48;
+  --tooltip-bg: #14120f;
+  --scroll-thumb: rgba(232, 229, 221, 0.14);
+  --scroll-thumb-hover: rgba(232, 229, 221, 0.24);
+  --kind-acao-ink: #8fb0d1;
+  --kind-risco-ink: #c9a25f;
 }
 
 * {
@@ -96,13 +153,13 @@ button:disabled {
   height: 9px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(38, 36, 31, 0.13);
+  background: var(--scroll-thumb);
   border-radius: 99px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(38, 36, 31, 0.22);
+  background: var(--scroll-thumb-hover);
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-track {
@@ -112,6 +169,7 @@ button:disabled {
 /* ------------------------------------------------------------------ shell */
 
 .app {
+  position: relative; /* âncora da .rec-pill flutuante */
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -192,9 +250,9 @@ button:disabled {
   margin: 0 14px 10px;
   padding: 9px 12px;
   border-radius: var(--r-md);
-  background: #fdf6e7;
-  border: 1px solid #f0e3c4;
-  color: #7a6636;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-ink);
   font-size: 12.5px;
 }
 
@@ -225,6 +283,21 @@ button:disabled {
   z-index: 5;
   padding: 2px 14px 10px;
   background: linear-gradient(to bottom, var(--cream) 68%, rgba(250, 249, 245, 0));
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-row .searchbar {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-entry {
+  flex: 0 0 auto;
 }
 
 .searchbar {
@@ -469,14 +542,14 @@ button:disabled {
 .answer-fail {
   padding: 14px;
   border-radius: var(--r-lg);
-  background: #fbf1ee;
-  border: 1px solid #eccfc6;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
 }
 
 .answer-fail-msg {
   margin: 0 0 10px;
   font-size: 13px;
-  color: #a4503c;
+  color: var(--danger-ink);
 }
 
 .answer-retry {
@@ -526,6 +599,10 @@ button:disabled {
 }
 
 .briefing {
+  /* flex item com overflow!=visible tem min-height 0: quando a lista de
+     Recentes estoura a altura da Home (flex column), o card era ESMAGADO
+     a 0px — "aparece e some". flex none = altura própria, sempre. */
+  flex: 0 0 auto;
   margin: 4px 14px 16px;
   overflow: hidden;
 }
@@ -736,7 +813,7 @@ button:disabled {
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #3a3730;
+  background: var(--tooltip-bg);
 }
 
 .btn-primary:active:not(:disabled) {
@@ -828,14 +905,14 @@ button:disabled {
 }
 
 .btn-stop:hover:not(:disabled) {
-  background: #f6e6e2;
-  color: #a4503c;
+  background: var(--danger-wash);
+  color: var(--danger-ink);
 }
 
 .session-error {
   margin: 0 18px 8px;
   font-size: 12px;
-  color: #a4503c;
+  color: var(--danger-ink);
 }
 
 /* o notepad — muito espaço em branco, texto do usuário escuro */
@@ -983,6 +1060,7 @@ button:disabled {
 /* painel de transcript */
 
 .transcript {
+  position: relative;  /* âncora do popover de glossário */
   flex: 0 0 300px;
   min-width: 0;
   display: flex;
@@ -990,6 +1068,80 @@ button:disabled {
   border-left: 1px solid var(--line);
   background: var(--surface-sunken);
   animation: slide 200ms ease both;
+}
+
+/* ── Glossário via seleção (popover no transcript) ───────────────────── */
+
+.gloss-pop {
+  position: absolute;
+  z-index: 30;
+  width: 224px;
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--surface, #fff);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  animation: rise 140ms ease both;
+}
+
+.gloss-from {
+  font-size: 11px;
+  color: var(--ink-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gloss-row {
+  display: flex;
+  gap: 6px;
+}
+
+.gloss-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: var(--r-sm, 6px);
+  border: 1px solid var(--line);
+  background: var(--surface-sunken);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.gloss-save {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-radius: var(--r-sm, 6px);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--sage-deep);
+  background: var(--sage-wash);
+  border: 1px solid var(--sage-wash-deep);
+}
+
+.gloss-save:disabled { opacity: 0.5; }
+
+.gloss-err {
+  font-size: 11px;
+  color: var(--danger-ink);
+}
+
+.gloss-toast {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 30;
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  background: var(--sage-wash);
+  border: 1px solid var(--sage-wash-deep);
+  color: var(--sage-deep);
+  font-size: 11.5px;
+  animation: rise 140ms ease both;
 }
 
 @keyframes slide {
@@ -1115,7 +1267,7 @@ button:disabled {
 }
 
 .state-off .dot-state {
-  background: #c9a08f;
+  background: var(--danger-mid);
 }
 
 .state-on,
@@ -1140,7 +1292,7 @@ button:disabled {
 .daemon-error {
   margin: 0 14px 10px;
   font-size: 12px;
-  color: #a4503c;
+  color: var(--danger-ink);
 }
 
 .btn-danger {
@@ -1151,16 +1303,16 @@ button:disabled {
   gap: 7px;
   height: 36px;
   border-radius: var(--r-md);
-  border: 1px solid #eccfc6;
-  background: #fbf1ee;
-  color: #a4503c;
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-ink);
   font-size: 13px;
   font-weight: 500;
   transition: background 120ms ease;
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: #f6e6e2;
+  background: var(--danger-wash);
 }
 
 /* log ao vivo */
@@ -1326,7 +1478,7 @@ button:disabled {
 }
 
 .btn-ctx-send:hover:not(:disabled) {
-  background: #3a3730;
+  background: var(--tooltip-bg);
 }
 
 .btn-ctx-skip {
@@ -1376,6 +1528,7 @@ button:disabled {
 /* ---------------------------------------------------------------- leitura */
 
 .reader {
+  position: relative; /* âncora do popover de correção de termo */
   overflow: hidden;
 }
 
@@ -1601,85 +1754,97 @@ button:disabled {
 
 /* ── Insights acima do editor (faixa dispensável) ────────────────────── */
 
+/* Minimalista: linhas quietas, sem cartão — um ponto colorido carrega o tipo,
+   o texto vive numa linha só e o detalhe completo fica no tooltip. */
 .insights-strip {
   flex: 0 0 auto;
-  max-height: 168px;
+  max-height: 170px; /* 5 chips, agora com até 2 linhas cada */
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 16px 8px;
+  gap: 1px;
+  padding: 0 16px 6px;
 }
 
 .insight-chip {
   position: relative;
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 30px 8px 10px;
-  border-radius: var(--r-md);
-  background: var(--sage-wash);
-  border: 1px solid var(--sage-wash-deep);
+  align-items: flex-start; /* texto pode ter 2+ linhas */
+  gap: 7px;
+  padding: 3px 26px 3px 6px;
+  border-radius: var(--r-sm, 6px);
   animation: rise 180ms ease both;
+}
+
+.insight-chip:hover {
+  background: var(--cream-deep);
 }
 
 .insight-when {
   flex: 0 0 auto;
-  margin-top: 1px;
-  font-size: 10.5px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
-  color: var(--sage-deep);
+  color: var(--ink-mute);
 }
 
 .insight-text {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
   color: var(--ink-soft);
-  /* 2 linhas; o texto completo vive no tooltip (title) */
+  /* colapsado: até 2 linhas (uma só truncava decisões/ações no meio);
+     expandido: texto completo, sem corte */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
+.insights-strip.is-expanded .insight-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
 .insight-kind {
   flex: 0 0 auto;
-  margin-top: 1px;
-  padding: 3px 8px;
-  border-radius: 99px;
-  font-size: 10px;
+  margin-top: 4px; /* alinha com a primeira linha do texto multilinha */
+  font-size: 9.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   line-height: 1;
 }
 
-.kind-decisao {
-  background: var(--sage-wash-deep);
-  color: var(--sage-deep);
+.insight-kind::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 5px;
+  vertical-align: 0.5px;
+  opacity: 0.75;
 }
 
-.kind-acao {
-  background: #e3ecf3;
-  color: #47617d;
-}
-
-.kind-risco {
-  background: #f6e8d8;
-  color: #8a6432;
-}
-
-.kind-info {
-  background: var(--cream-deep);
-  color: var(--ink-mute);
-}
+.kind-decisao { color: var(--sage-deep); }
+.kind-acao { color: var(--kind-acao-ink); }
+.kind-risco { color: var(--kind-risco-ink); }
+.kind-info { color: var(--ink-mute); }
 
 .insight-chip .card-dismiss {
   position: absolute;
-  top: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   right: 6px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.insight-chip:hover .card-dismiss {
+  opacity: 1;
 }
 
 /* ── Enhance ao vivo ─────────────────────────────────────────────────── */
@@ -1736,4 +1901,960 @@ button:disabled {
 
 .enhanced-refresh:hover:not(:disabled) {
   text-decoration: underline;
+}
+
+/* ------------------------------------------------------------ chat vault */
+
+.chat-screen {
+  overflow: hidden;
+}
+
+.chat-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 12px;
+}
+
+.chat-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.chat-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-empty {
+  padding: 8px 2px;
+}
+
+.chat-bubble-user {
+  align-self: flex-end;
+  max-width: 82%;
+  padding: 8px 13px;
+  border-radius: var(--r-lg);
+  border-bottom-right-radius: 4px;
+  background: var(--sage-wash);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: rise 160ms ease both;
+}
+
+.chat-bubble-ai {
+  align-self: flex-start;
+  max-width: 92%;
+  padding: 12px 14px;
+  border-radius: var(--r-lg);
+  border-bottom-left-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+  animation: rise 160ms ease both;
+}
+
+.chat-bubble-wait {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+
+.chat-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.chat-error {
+  align-self: flex-start;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-ink);
+  font-size: 12.5px;
+}
+
+.chat-askbar-slot {
+  flex: 0 0 auto;
+  padding: 0 14px 14px;
+}
+
+/* ── Navegação durante a call ─────────────────────────────────────────── */
+
+/* Pill flutuante "gravando" — visível fora da tela de sessão; clique volta */
+.rec-pill {
+  position: absolute;
+  top: 44px;
+  right: 14px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 280px;
+  padding: 6px 12px;
+  border: 1px solid var(--sage-wash-deep);
+  border-radius: 99px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+}
+
+.rec-pill:hover {
+  border-color: var(--sage);
+}
+
+.rec-pill-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.rec-pill-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+
+.session-back {
+  flex: 0 0 auto;
+  margin-right: 2px;
+}
+
+/* ── Multi-chats (abas de conversa) ───────────────────────────────────── */
+
+.chat-head .chat-title {
+  flex: 1;
+}
+
+.chat-new {
+  flex: 0 0 auto;
+}
+
+.chat-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 14px 10px;
+  scrollbar-width: thin;
+}
+
+.chat-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 200px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--surface-sunken);
+}
+
+.chat-tab.is-active {
+  border-color: var(--sage);
+  background: var(--sage-wash);
+}
+
+.chat-tab-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 160px;
+  padding: 4px 2px 4px 12px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.chat-tab.is-active .chat-tab-label {
+  color: var(--sage-deep);
+  font-weight: 600;
+}
+
+.chat-tab-close {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px 4px 4px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--ink-faint);
+}
+
+.chat-tab-close:hover {
+  color: var(--ink);
+}
+
+/* ── Transcript: aviso de linhas ocultas ──────────────────────────────── */
+
+.tline-elided {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  font-style: italic;
+}
+
+/* ── Toggle rápido/profundo do chat do vault ──────────────────────────── */
+
+.btn-mode {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 99px;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 120ms ease;
+}
+
+.btn-mode:hover:not(:disabled) {
+  background: var(--cream-deep);
+}
+
+.btn-mode.is-deep {
+  background: var(--sage-wash);
+}
+
+/* ── Insights: colapsado mostra só os recentes; expandido rola mais alto ── */
+
+.insights-strip.is-expanded {
+  max-height: 45vh;
+}
+
+.insight-more {
+  align-self: flex-start;
+  padding: 2px 10px;
+  border-radius: 99px;
+  background: var(--cream-deep);
+  color: var(--ink-mute);
+  font-size: 11px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.insight-more:hover {
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+}
+
+/* botão de resumo rápido dos últimos 5 min (askbar da sessão) */
+.btn-recap {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 99px;
+  background: none;
+  color: var(--ink-mute);
+  font-size: 11.5px;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.btn-recap:hover:not(:disabled) {
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+}
+
+/* ── Tela de Tarefas (agregado dos action items das reuniões) ─────────── */
+
+.tasks-screen {
+  overflow: hidden;
+}
+
+.tasks-count {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 99px;
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.tasks-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 16px;
+}
+
+.tasks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  transition: background 120ms ease;
+}
+
+.task-item:hover {
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.task-check {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--sage);
+  cursor: pointer;
+}
+
+.task-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-text {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.4;
+}
+
+.task-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.task-owner {
+  padding: 1px 8px;
+  border-radius: 99px;
+  background: var(--cream-deep);
+  font-weight: 600;
+}
+
+.task-due.is-overdue {
+  color: var(--danger-ink);
+  font-weight: 600;
+}
+
+.task-note {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.task-note:hover {
+  color: var(--sage-deep);
+  text-decoration: underline;
+}
+
+/* ── Tarefas: grupos, vencidas e conclusão animada ────────────────────── */
+
+.task-group {
+  margin: 4px 6px 14px;
+}
+
+.task-group-label {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0 0 4px;
+  padding: 0 10px;
+  font-family: var(--serif);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink-soft);
+}
+
+.task-group-mine {
+  color: var(--sage-deep);
+}
+
+.task-group-count {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--cream-deep);
+  color: var(--ink-mute);
+}
+
+.task-group-mine .task-group-count {
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+}
+
+.task-group-empty {
+  padding: 2px 10px 0;
+  font-size: 12px;
+}
+
+.task-item.is-overdue {
+  background: var(--danger-bg);
+}
+
+.task-item.is-overdue:hover {
+  background: var(--danger-wash);
+  box-shadow: var(--shadow-soft);
+}
+
+.task-item.is-closing .task-text {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+  transition: color 300ms ease;
+}
+
+.task-item.is-closing {
+  opacity: 0.55;
+  transition: opacity 300ms ease;
+}
+
+.tasks-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 48px 16px;
+  color: var(--ink-mute);
+}
+
+.tasks-empty-glyph {
+  font-size: 26px;
+  color: var(--sage);
+}
+
+/* ── Efeito de digitação da prévia aprimorada ─────────────────────────── */
+
+.type-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--sage);
+  animation: caret-blink 0.9s steps(2) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── Pauta sugerida (durante a call) ──────────────────────────────────── */
+
+.pauta-card {
+  position: relative;
+  margin: 0 16px 8px;
+  padding: 9px 12px 10px;
+  border: 1px solid var(--sage-wash-deep);
+  border-radius: var(--r-md);
+  background: var(--sage-wash);
+  animation: rise 180ms ease both;
+}
+
+.pauta-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.pauta-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sage-deep);
+}
+
+.pauta-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.pauta-list strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pauta-due {
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+
+.pauta-more {
+  color: var(--ink-mute);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.pauta-related {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+/* badge de tarefas vencidas no ícone da Home */
+.tasks-entry {
+  position: relative;
+}
+
+.tasks-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  background: var(--danger-ink);
+  color: var(--surface);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* link inline no card de pauta */
+.pauta-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--sage-deep);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.pauta-link:hover {
+  text-decoration: underline;
+}
+
+/* ── Menu de contexto das notas (botão direito) ───────────────────────── */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 140px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+  display: flex;
+  flex-direction: column;
+}
+
+.ctx-menu button {
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.ctx-menu button:hover {
+  background: var(--cream-deep);
+}
+
+.ctx-menu .ctx-menu-danger {
+  color: var(--danger-ink);
+}
+
+.ctx-menu .ctx-menu-danger:hover {
+  background: var(--danger-bg);
+}
+
+/* ── Agenda: navegação por dia + nota casada ──────────────────────────── */
+
+.agenda-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.agenda-nav .agenda-nav-label {
+  margin: 0 2px;
+  min-width: 74px;
+  text-align: center;
+}
+
+.agenda-nav-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 99px;
+  color: var(--ink-faint);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.agenda-nav-btn:hover {
+  background: var(--cream-deep);
+  color: var(--ink-soft);
+}
+
+.chev-left {
+  transform: rotate(180deg);
+}
+
+.agenda-today {
+  margin-left: 4px;
+  padding: 1px 9px;
+  border-radius: 99px;
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.agenda-item:disabled {
+  opacity: 1; /* dia passado sem nota: legível, só não clicável */
+  cursor: default;
+}
+
+.agenda-item.has-note:hover {
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.agenda-note-glyph {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  color: var(--sage);
+}
+
+/* botão "abrir em tela cheia" do card de briefing */
+.briefing-head-row {
+  display: flex;
+  align-items: center;
+}
+
+.briefing-head-row .briefing-head {
+  flex: 1;
+  min-width: 0;
+}
+
+.briefing-open {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-right: 8px;
+  border-radius: 99px;
+  color: var(--ink-faint);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.briefing-open:hover {
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+}
+
+/* corpo colapsado do card ganha mais respiro pro formato narrativo */
+.briefing-body {
+  max-height: 380px;
+}
+
+/* "fio da meada" no card de pauta — o protagonista do card */
+.pauta-context {
+  margin: 2px 0 6px;
+}
+
+.pauta-context p {
+  margin: 0 0 3px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+/* ── Temas (notas macro por assunto) ──────────────────────────────────── */
+
+.topic-open {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--serif);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.topic-open:hover {
+  color: var(--sage-deep);
+  text-decoration: underline;
+}
+
+.topic-refresh,
+.topic-create {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: var(--cream-deep);
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.topic-refresh:hover:not(:disabled),
+.topic-create:hover:not(:disabled) {
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+}
+
+.topic-hint {
+  padding: 0 10px 4px;
+  font-size: 11.5px;
+}
+
+.topic-msg {
+  margin: 0 10px 8px;
+  padding: 7px 11px;
+  border-radius: var(--r-md);
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+  font-size: 12px;
+}
+
+/* ── Ações rápidas da sessão (acima da barra de pergunta) ─────────────── */
+
+.quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 6px;
+  min-height: 24px;
+}
+
+.quick-chip {
+  padding: 3px 11px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.quick-chip:hover {
+  background: var(--sage-wash);
+  border-color: var(--sage-wash-deep);
+  color: var(--sage-deep);
+}
+
+.quick-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--ink-mute);
+}
+
+/* pergunta sugerida — destaque próprio entre os insights */
+.kind-pergunta { color: var(--sage-deep); }
+.insight-chip:has(.kind-pergunta) {
+  background: var(--sage-wash);
+  border-radius: var(--r-sm);
+}
+
+/* ── Editor simples da nota (modo ✎ no leitor) ────────────────────────── */
+
+.reader-editor {
+  width: 100%;
+  min-height: 60vh;
+  padding: 4px 2px 24px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.reader-save,
+.reader-cancel {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border-radius: 99px;
+  font-size: 12px;
+}
+
+.reader-save {
+  background: var(--sage-wash);
+  color: var(--sage-deep);
+  font-weight: 600;
+}
+
+.reader-save:hover:not(:disabled) {
+  background: var(--sage-wash-deep);
+}
+
+.reader-cancel {
+  color: var(--ink-mute);
+}
+
+.reader-cancel:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+/* ── Layout largo: lista de notas na lateral (≥900px) ─────────────────── */
+
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.side-notes {
+  flex: 0 0 260px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 8px 10px 12px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-sunken);
+}
+
+.side-filter {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  outline: none;
+  background: var(--surface);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.side-filter:focus {
+  border-color: var(--sage-wash-deep);
+}
+
+.side-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.side-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 9px;
+  border-radius: var(--r-sm);
+  text-align: left;
+  transition: background 110ms ease;
+}
+
+.side-item:hover {
+  background: var(--cream-deep);
+}
+
+.side-item.is-active {
+  background: var(--sage-wash);
+}
+
+.side-item-title {
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.side-item.is-active .side-item-title {
+  color: var(--sage-deep);
+  font-weight: 600;
+}
+
+.side-item-date {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+
+.side-empty {
+  padding: 8px 9px;
+  font-size: 12px;
+}
+
+/* em janela larga o leitor ganha coluna de leitura confortável */
+.app.is-wide .reader-body,
+.app.is-wide .prose-editorial {
+  max-width: 760px;
 }
