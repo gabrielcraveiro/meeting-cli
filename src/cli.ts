@@ -11,7 +11,8 @@ import { runConfigWizard, loadConfig } from './config';
 import { cmdSetup, isSidecarInstalled } from './commands/setup';
 import { cmdDoctor } from './commands/doctor';
 import { cmdStats } from './commands/stats';
-import { cmdDaemon } from './commands/daemon';
+import { cmdDaemon, cmdDaemonCtl } from './commands/daemon';
+import { cmdOrganizeJob } from './commands/organizeJob';
 import { cmdBriefing } from './commands/briefing';
 import { listTemplates } from './services/templates';
 
@@ -74,11 +75,18 @@ program
   .action(cmdStart);
 
 program
-  .command('daemon')
-  .description('Escuta a extensão do browser e grava automaticamente ao entrar em calls')
+  .command('daemon [action]')
+  .description('Escuta a extensão do browser e grava automaticamente ao entrar em calls (ações: status | stop | restart)')
   .option('-p, --port <port>', 'Porta HTTP local', '7899')
   .option('--headless', 'Sessões sem TUI: output do filho capturado em /daemon/logs (app desktop)')
-  .action(cmdDaemon);
+  .option('--force', 'stop/restart mesmo com gravação em andamento')
+  .action((action: string | undefined, opts: { port?: string; headless?: boolean; force?: boolean }) =>
+    action ? cmdDaemonCtl(action, opts) : cmdDaemon(opts));
+
+program
+  .command('organize-job <jobFile>')
+  .description('Worker interno: organiza uma nota em segundo plano a partir de um job JSON')
+  .action(cmdOrganizeJob);
 
 program
   .command('transcribe <file>')

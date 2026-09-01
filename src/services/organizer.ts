@@ -106,6 +106,98 @@ export function formatUserNotes(notes: UserNote[]): string {
 }
 
 /**
+ * Remove preambulos meta que o claude headless pode prefixar a nota — blocos
+ * "★ Insight ─── ... ───" herdados dos output styles do usuario, linhas
+ * decorativas e cercas de codigo soltas. Sem isso, a primeira linha do bloco
+ * vira o titulo do arquivo no vault.
+ */
+export function stripMetaPreamble(text: string): string {
+  const lines = text.split('\n');
+  const isRuler = (s: string) => /^[─—━_]{4,}/.test(s) || /^-{4,}$/.test(s);
+  let i = 0;
+  let unwrapped = false;
+  for (;;) {
+    while (i < lines.length && (lines[i].trim() === '' || /^```/.test(lines[i].trim()))) i++;
+    if (i >= lines.length) break;
+    const l = lines[i].trim();
+    if (/^[★☆]/.test(l)) {
+      i++;  // consome o bloco inteiro ate a regua de fechamento
+      while (i < lines.length && !isRuler(lines[i].trim())) i++;
+      if (i < lines.length) i++;
+      continue;
+    }
+    if (isRuler(l)) { i++; continue; }
+    // Linha-rotulo ecoada do contrato ("Título: X", "Título e nota:", "Título
+    // e nota da reunião — primeira linha real abaixo."). Se o resto for curto
+    // e nao for meta-comentario, e o titulo real com prefixo — desembrulha.
+    // Senao, descarta a linha; o titulo real vem nas seguintes.
+    const label = l.match(/^#{0,6}\s*t[íi]tulo\b[^:—–-]*[:—–-]\s*(.*)$/i);
+    if (label) {
+      const rest = label[1].trim();
+      const isMeta = /primeira linha|abaixo|nota da reuni|vou gerar|segue (a )?nota/i.test(rest);
+      if (rest && rest.length <= 80 && !isMeta) {
+        lines[i] = rest;
+        unwrapped = true;
+        break;
+      }
+      i++; continue;
+    }
+    break;
+  }
+  // ATENCAO: `unwrapped` importa quando o rotulo esta na PRIMEIRA linha (i=0)
+  // — sem ele, a reescrita era descartada e o rotulo vazava pro titulo.
+  return i > 0 || unwrapped ? lines.slice(i).join('\n') : text;
+}
+
+export interface ParsedSummary {
+  title: string;
+  participants: string[];
+  tags: string[];
+  /** corpo da nota sem titulo/participantes/linha de tags */
+  body: string;
+}
+
+/**
+ * Interpreta a saida crua do organizador: Linha 1 = titulo, Linha 2 =
+ * "Participantes: ...", ultima linha "Tags: ...". Compartilhado entre o
+ * finalize sincrono (CLI interativo) e o worker `meeting organize-job`.
+ */
+export function parseOrganizedSummary(raw: string): ParsedSummary {
+  const lines = stripMetaPreamble(raw).split('\n');
+  let title = '';
+  let participants: string[] = [];
+  const tags: string[] = [];
+
+  if (lines.length >= 1) {
+    const firstLine = lines[0].replace(/^#+\s*/, '').trim();
+    // "Participantes:" na primeira linha = o modelo pulou o título; deixa a
+    // linha para o parse de participantes abaixo em vez de virar título.
+    if (firstLine && !firstLine.startsWith('##') && !firstLine.startsWith('|') && !firstLine.startsWith('-')
+        && !/^participantes\s*:/i.test(firstLine)) {
+      title = firstLine;
+      lines.shift();
+    }
+  }
+  if (lines.length >= 1) {
+    const m = lines[0].match(/^Participantes:\s*(.+)/i);
+    if (m) {
+      participants = m[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
+      lines.shift();
+    }
+  }
+  let body = lines.join('\n').replace(/^\n+/, '');
+  const tagMatch = body.match(/^Tags:\s*(.+)$/mi);
+  if (tagMatch) {
+    for (const t of tagMatch[1].split(',')) {
+      const tag = t.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+      if (tag.length > 1 && tag.length < 30) tags.push(tag);
+    }
+    body = body.replace(/\n*Tags:\s*.+$/mi, '').trim();
+  }
+  return { title, participants, tags, body };
+}
+
+/**
  * Engine dispatcher: routes to the Claude Code headless engine when configured,
  * falling back to the plain chat-completion organizer on any failure (claude
  * binary missing, timeout, error result) so a meeting note is never lost.
@@ -152,14 +244,18 @@ export async function organizeTranscript(transcript: string, config: Config, opt
   }
   userContent += `\nTranscription:\n\n${budgetedTranscript}`;
 
+  // max_completion_tokens (não max_tokens) e SEM temperature: os modelos
+  // GPT-5.x do Azure rejeitam os parâmetros legados; os antigos aceitam ambos.
   const payload = {
     model: config.chatModel || 'gpt-4o-mini',
     messages: [
       { role: 'system', content: config.organizationPrompt },
       { role: 'user', content: userContent },
     ],
-    temperature: 0.3,
-    max_tokens: 4000,
+    // GPT-5.x (reasoning) consome DESTE teto os tokens de raciocínio interno:
+    // 4000 dava nota VAZIA em reunião longa (raciocínio comia tudo e o texto
+    // visível vinha em branco). 16k dá folga pros dois.
+    max_completion_tokens: 16000,
   };
 
   const response = await fetch(url, {
@@ -267,8 +363,7 @@ async function chatViaLiteLLM(
   const payload = {
     model: config.chatModel || 'gpt-4o-mini',
     messages,
-    temperature: 0.7,
-    max_tokens: 2000,
+    max_completion_tokens: 2000,
   };
 
   const response = await fetch(url, {

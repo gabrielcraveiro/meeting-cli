@@ -80,6 +80,12 @@ export function updateBridgeSpeech(spans: SpeechSpan[]): void {
   writeBridge({ ...current, speech: valid, updatedAt: Date.now() });
 }
 
+/** Corrige o título mid-session (ex.: extensão trocou nome de pessoa pelo título real). */
+export function updateBridgeTitle(title: string): void {
+  const current = readBridge() ?? { participants: [], stopRequested: false, updatedAt: 0 };
+  writeBridge({ ...current, title: title.slice(0, 200), updatedAt: Date.now() });
+}
+
 export function updateBridgeSharing(active: boolean): void {
   const current = readBridge() ?? { participants: [], stopRequested: false, updatedAt: 0 };
   writeBridge({ ...current, sharing: active, updatedAt: Date.now() });

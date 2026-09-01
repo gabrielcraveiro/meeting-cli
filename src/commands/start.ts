@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
 import { spawn, ChildProcess } from 'child_process';
@@ -8,13 +9,15 @@ import boxen from 'boxen';
 import { requireConfig } from '../config';
 import { createTUI } from '../tui/index';
 import { transcribeFile, transcribeFull } from '../services/transcriber';
-import { organize, chatWithMeetings } from '../services/organizer';
+import { organize, chatWithMeetings, parseOrganizedSummary } from '../services/organizer';
 import { createMeetingNote, loadMeetingSummaries } from '../services/storage';
 import { getSidecarCapturePath } from './setup';
 import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/templates';
 import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
 import { matchSpeaker, enrollSpeaker } from '../services/voice';
 import { readBridge } from '../services/bridge';
+import { applyGlossary, glossaryPromptBlock } from '../services/glossary';
+import { applyTaskClosures } from '../services/taskCloser';
 import { notifyWindows } from '../services/notify';
 import {
   enableReporting, reportTranscript, reportInsight, reportState, reportChatReply, fetchQueue,
@@ -322,7 +325,7 @@ const INSIGHT_PROMPT = `<role>Analista de reunioes em tempo real. Voce recebe tr
 - [risco] Blocker, dependencia externa, ou preocupacao levantada
 - [ponto] Insight tecnico ou de negocio que altera entendimento
 
-Tags obrigatorias. Maximo 5 bullets. Sem preambulo. Portugues BR.
+Tags obrigatorias. Maximo 3 bullets. Sem preambulo. Portugues BR.
 Se nenhum ponto relevante: responda exatamente "(sem pontos relevantes ainda)"
 </format>
 
@@ -330,6 +333,11 @@ Se nenhum ponto relevante: responda exatamente "(sem pontos relevantes ainda)"
 - Nao repita pontos de analises anteriores — foque no que e NOVO neste trecho
 - Infira nomes reais se mencionados no dialogo. Use [Speaker N] apenas se o nome nao for identificavel
 - "Vamos fazer X" = decisao. "Eu vou fazer X" = acao. "E se X acontecer?" = risco
+- [ponto] e EXCECAO, nao regra: so quando muda o entendimento do projeto/negocio.
+  Recontagem do que foi falado NAO e insight. Na duvida, nao emita — o usuario
+  esta NA reuniao ouvindo tudo; silencio vale mais que ruido.
+- PRIVACIDADE: assunto pessoal sensivel (saude, familia, relacionamentos,
+  desabafos intimos) NUNCA vira insight — ignore o trecho por completo.
 </guidelines>`;
 
 // ── Utilities ──
@@ -496,7 +504,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   let warned30 = false;
   let warned60 = false;
   let insightInterval: NodeJS.Timeout | null = null;
+  let questionInterval: NodeJS.Timeout | null = null;
   let lastInsightLineCount = 0;
+  /** Falas das legendas do Teams já analisadas pelos insights (fonte preferida). */
+  let lastInsightSpanCount = 0;
   let insightBusy = false;
   let chatBusy = false;
   let daemonQueueBusy = false;
@@ -512,6 +523,8 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   const segmentRmsDb: Map<number, number> = new Map();
   let skippedSilentSegments = 0;
   let transcribedSegments = 0;
+  /** segmentos pulados porque as legendas do Teams já cobriam a janela */
+  let skippedCaptionSegments = 0;
   let totalBillableSec = 0;  // actual speaking time billed by Deepgram (post silence-stripping)
   const transcribeQueue = createConcurrencyQueue(2);
   const remoteSpeakerIds = new Set<string>();   // track unique remote speakers across segments
@@ -543,10 +556,31 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     ui.showStatus(formatTime(elapsedSec), processedSegments.size);
   }
 
+  /** Política "evite o máximo Deepgram": sessão guiada por legendas (≥10 falas
+   * com texto) NÃO transcreve ao vivo — nem os buracos de quando o usuário sai
+   * da tela: as legendas recuperam o histórico na volta, e o Deepgram cobrindo
+   * o buraco só gerava trechos "Remoto N" que ninguém reconcilia depois.
+   * O WAV segue gravado como seguro (full-pass no finalize se as legendas
+   * terminarem pobres). Deepgram só volta se as legendas MORREREM de verdade
+   * (nenhuma fala há >10min relativo a este segmento) — teto de perda. */
+  function captionsCoverSegment(offsetSec: number): boolean {
+    if (!fromBrowser) return false;
+    const spans = (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim());
+    if (spans.length < 10) return false;
+    const lastEnd = spans[spans.length - 1].end;
+    return lastEnd >= offsetSec - 600;
+  }
+
   async function transcribeSegment(segPath: string, offsetSec: number): Promise<void> {
     try {
       const stat = fs.statSync(segPath);
       if (stat.size < 4096) return;
+
+      if (captionsCoverSegment(offsetSec)) {
+        skippedCaptionSegments++;
+        ui.updateTranscript(chalk.gray(`${formatTimestamp(offsetSec)} legendas cobrindo — Deepgram pausado`));
+        return;
+      }
 
       ui.updateTranscript(chalk.gray(`transcrevendo ${path.basename(segPath)}...`));
       // Single-pass: nova-3 + diarization on each segment (no re-transcription needed)
@@ -559,6 +593,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
         }
       }
       if (!text) return;
+      text = applyGlossary(text, config);  // corrige termos do meeting-glossario.md
 
       transcribedSegments++;
       totalBillableSec += result.billableSec;
@@ -632,17 +667,41 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
 
   async function runAutoInsight() {
     if (insightBusy || chatBusy || stopping || paused) return;
-    if (transcriptLines.length <= lastInsightLineCount) return;
-    if (transcriptLines.length < 3) return;
+
+    // Fonte preferida: legendas do Teams via bridge — trazem o NOME REAL de
+    // quem falou. O Deepgram ao vivo rotula "Remoto N" e o insight sai cego
+    // ("não sei quem é Remoto 0"). Deepgram fica como fallback (sem legendas).
+    const spans = fromBrowser
+      ? (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim())
+      : [];
+    const useCaptions = spans.length >= 3 && spans.length > lastInsightSpanCount;
+
+    if (!useCaptions) {
+      if (transcriptLines.length <= lastInsightLineCount) return;
+      if (transcriptLines.length < 3) return;
+    }
 
     insightBusy = true;
     // Cost optimization: send only NEW lines since last insight (delta), with brief context summary
-    const newLines = transcriptLines.slice(lastInsightLineCount);
-    const contextSummary = lastInsightLineCount > 0
-      ? `[Contexto: ${lastInsightLineCount} linhas anteriores ja analisadas. Foque no trecho NOVO abaixo.]\n\n`
-      : '';
-    const currentTranscript = contextSummary + newLines.join('\n');
-    lastInsightLineCount = transcriptLines.length;
+    let currentTranscript: string;
+    if (useCaptions) {
+      const newSpans = spans.slice(lastInsightSpanCount);
+      const contextSummary = lastInsightSpanCount > 0
+        ? `[Contexto: ${lastInsightSpanCount} falas anteriores ja analisadas. Foque no trecho NOVO abaixo.]\n\n`
+        : '';
+      currentTranscript = contextSummary + newSpans
+        .map(sp => `[${formatTimestamp(sp.start)}] [${sp.who}] ${(sp.text || '').trim()}`)
+        .join('\n');
+      lastInsightSpanCount = spans.length;
+      lastInsightLineCount = transcriptLines.length;  // mesmo trecho não volta pela via Deepgram
+    } else {
+      const newLines = transcriptLines.slice(lastInsightLineCount);
+      const contextSummary = lastInsightLineCount > 0
+        ? `[Contexto: ${lastInsightLineCount} linhas anteriores ja analisadas. Foque no trecho NOVO abaixo.]\n\n`
+        : '';
+      currentTranscript = contextSummary + newLines.join('\n');
+      lastInsightLineCount = transcriptLines.length;
+    }
 
     try {
       const messages = [
@@ -852,6 +911,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     if (pollInterval) clearInterval(pollInterval);
     if (timerInterval) clearInterval(timerInterval);
     if (insightInterval) clearInterval(insightInterval);
+    if (questionInterval) clearInterval(questionInterval);
 
     // Exit alternate screen for finalization output
     ui.teardown();
@@ -890,6 +950,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       const savedCost = (skippedSilentSegments * SEGMENT_SECONDS / 60 * DEEPGRAM_PER_MIN).toFixed(4);
       console.log(chalk.green(`  ${skippedSilentSegments} segmentos silenciosos pulados (economia: ~$${savedCost})`));
     }
+    if (skippedCaptionSegments > 0) {
+      const savedCost = (skippedCaptionSegments * SEGMENT_SECONDS / 60 * DEEPGRAM_PER_MIN).toFixed(4);
+      console.log(chalk.green(`  ${skippedCaptionSegments} segmentos cobertos pelas legendas — Deepgram pausado (economia: ~$${savedCost})`));
+    }
 
     // Caption transcript from the browser bridge: Teams live captions carry the
     // REAL speaker name per utterance and cover ALL voices (including the local
@@ -903,7 +967,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       if (withText.length > 0) {
         captionUtterances = withText.length;
         captionTranscript = withText
-          .map(sp => `${formatTimestamp(sp.start)} [${sp.who}] ${sp.text!.trim()}`)
+          .map(sp => `${formatTimestamp(sp.start)} [${sp.who}] ${applyGlossary(sp.text!.trim(), config)}`)
           .join('\n');
       }
     }
@@ -921,8 +985,11 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       if (fullTranscript.trim()) {
         extraContext.push(
           `# Transcricao auxiliar (Deepgram — melhor qualidade acustica, speakers genericos)\n`
-          + `Use para conferir trechos confusos da transcricao principal. A identidade dos `
-          + `speakers da transcricao principal (legendas do Teams) e a correta.\n\n`
+          + `Use para (1) conferir trechos confusos da transcricao principal e (2) COBRIR LACUNAS: `
+          + `as legendas do Teams pausam quando o usuario navega para fora da tela da call, entao `
+          + `trechos que so existem aqui ACONTECERAM e devem entrar na nota (a auxiliar cobre o `
+          + `audio inteiro). A identidade dos speakers da transcricao principal (legendas do Teams) `
+          + `e a correta; nos trechos so da auxiliar, infira o speaker pelo contexto.\n\n`
           + fullTranscript
         );
       }
@@ -1217,11 +1284,93 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       }
     }
 
+    // Glossário: além da substituição literal já aplicada, a IA recebe as
+    // grafias corretas pra normalizar variantes que o replace não pegou.
+    const glossaryBlock = glossaryPromptBlock(config);
+    if (glossaryBlock) extraContext.push(glossaryBlock);
+
     // Inject post-meeting context into transcript for richer AI output
     const transcriptForAI = postMeetingContext
       ? `${fullTranscript}\n\n[Contexto do usuario pos-reuniao]: ${postMeetingContext}`
       : fullTranscript;
     const configWithPrompt = { ...config, organizationPrompt: finalPrompt };
+    let organizeFailed = false;
+
+    // ── Organização ASSÍNCRONA (sessões do daemon/browser) ────────────────
+    // O organize bloqueante custava minutos com a PRÓXIMA call já em andamento
+    // (o daemon só inicia a call em fila quando esta sessão sai). Aqui a nota
+    // é salva JÁ, com o transcript e um aviso "organizando" — e um worker
+    // destacado (`meeting organize-job`) roda a IA e substitui a nota depois.
+    if (fromBrowser) {
+      const segMin = (transcribedSegments * SEGMENT_SECONDS) / 60;
+      const retrMin = needsRetranscription ? (durationSec / 60) : 0;
+      const dgCost = (segMin + retrMin) * DEEPGRAM_PER_MIN;
+      const noteTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const keepAudio = config.deleteAudioAfterTranscription === false;
+      const aiModelLabel = config.organizerEngine === 'claude'
+        ? (config.claudeModel || 'claude-sonnet-5')
+        : (config.chatModel || 'gpt-4o-mini');
+
+      const placeholderPath = await createMeetingNote(config, {
+        transcript: fullTranscript,
+        summary: '> ⏳ Organizando com IA em segundo plano — esta nota será substituída automaticamente em 1-2 min.',
+        audioPath: keepAudio ? `Recordings/${finalAudioName}` : undefined,
+        durationSec,
+        whisperCost: dgCost,
+        chatCost: 0,
+        chatDeployment: aiModelLabel,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        date,
+        time: noteTime,
+        title: topic || 'Reuniao',
+        participants: [],
+        meetingType: templateName,
+        sourceNotes: userNotes.length > 0,
+      });
+
+      const jobsDir = path.join(os.homedir(), '.config', 'meeting-cli', 'organize-jobs');
+      fs.mkdirSync(jobsDir, { recursive: true });
+      const jobPath = path.join(jobsDir, `job-${Date.now()}.json`);
+      fs.writeFileSync(jobPath, JSON.stringify({
+        placeholderPath,
+        transcript: transcriptForAI,
+        noteTranscript: fullTranscript,
+        prompt: finalPrompt,
+        options: {
+          meetingDate: date,
+          participants: calendarAttendees.length > 0 ? calendarAttendees : undefined,
+          extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
+          userNotes: userNotes.length > 0 ? userNotes : undefined,
+        },
+        note: {
+          audioPath: keepAudio ? `Recordings/${finalAudioName}` : undefined,
+          durationSec,
+          whisperCost: dgCost,
+          date,
+          time: noteTime,
+          topic: topic || '',
+          meetingType: templateName,
+          sourceNotes: userNotes.length > 0,
+        },
+      }), 'utf-8');
+
+      const logFd = fs.openSync(path.join(jobsDir, 'organize.log'), 'a');
+      const worker = spawn(process.execPath, [path.resolve(process.argv[1]), 'organize-job', jobPath], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+      });
+      worker.unref();
+      fs.closeSync(logFd);
+
+      s.success({ text: `Transcript salvo — IA organizando em 2º plano (${path.basename(placeholderPath)})` });
+      cleanup(segmentsDir);
+      if (config.deleteAudioAfterTranscription !== false && fs.existsSync(finalAudioPath)) {
+        try { fs.unlinkSync(finalAudioPath); } catch {}
+      }
+      return;  // sessão livre — o daemon pode iniciar a call em fila agora
+    }
 
     try {
       const result = await organize(transcriptForAI, configWithPrompt, {
@@ -1238,45 +1387,33 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       s.success({ text: `IA (${result.engine}): ${totalTokens} tokens` });
     } catch (err) {
       s.error({ text: `IA falhou: ${(err as Error).message}` });
-      summary = '> Organizacao automatica falhou.';
+      organizeFailed = true;
+      summary = '> Organizacao automatica falhou. Transcricao preservada abaixo — '
+        + 'reprocesse com `meeting transcribe` ou pelo app.';
     }
 
-    // Parse title and participants from AI output (first two lines)
-    let meetingTitle = '';
-    let participants: string[] = [];
-    const summaryLines = summary.split('\n');
-    if (summaryLines.length >= 1) {
-      const firstLine = summaryLines[0].replace(/^#+\s*/, '').trim();
-      // Title is first line if it doesn't look like a section header or metadata
-      if (firstLine && !firstLine.startsWith('##') && !firstLine.startsWith('|') && !firstLine.startsWith('-')) {
-        meetingTitle = firstLine;
-        summaryLines.shift();
-      }
+    // Titulo/participantes/tags: parser compartilhado com o worker organize-job
+    // (inclui o strip de preambulos "★ Insight" do claude headless).
+    const parsed = parseOrganizedSummary(summary);
+    let meetingTitle = parsed.title;
+    const participants = parsed.participants;
+    const detectedTags = parsed.tags;
+    // Fechamento de pendências: propostas do agente validadas/aplicadas em código
+    const closure = applyTaskClosures(config, parsed.body, date);
+    summary = closure.summary;
+    for (const c of closure.closed) console.log(chalk.green(`  ☑ Pendência fechada: ${c.file}`));
+
+    // Falha na organizacao (ou titulo que e mensagem de erro): o titulo da call
+    // (bridge/agenda) e melhor que "Organizacao automatica falhou" no nome do arquivo.
+    if ((organizeFailed || !meetingTitle || /organizacao automatica falhou/i.test(meetingTitle)) && topic) {
+      meetingTitle = organizeFailed ? `${topic} (organizacao pendente)` : (meetingTitle || topic);
     }
-    if (summaryLines.length >= 1) {
-      const participantsLine = summaryLines[0];
-      const partMatch = participantsLine.match(/^Participantes:\s*(.+)/i);
-      if (partMatch) {
-        participants = partMatch[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
-        summaryLines.shift();
-      }
-    }
-    // Rebuild summary without title/participants lines
-    summary = summaryLines.join('\n').replace(/^\n+/, '');
 
     if (meetingTitle) {
       console.log(chalk.white(`  Titulo: ${meetingTitle}`));
     }
     if (participants.length > 0) {
       console.log(chalk.gray(`  Participantes: ${participants.join(', ')}`));
-    }
-
-    // Extract tags from AI response (consolidated — no separate API call)
-    let detectedTags: string[] = [];
-    const tagLineMatch = summary.match(/^Tags:\s*(.+)$/mi);
-    if (tagLineMatch) {
-      detectedTags = tagLineMatch[1].split(',').map(t => t.trim().toLowerCase().replace(/[^a-z0-9-]/g, '')).filter(t => t.length > 1 && t.length < 30);
-      summary = summary.replace(/\n*Tags:\s*.+$/mi, '').trim();
     }
     if (detectedTags.length > 0) {
       console.log(chalk.gray(`  Tags: ${detectedTags.join(', ')}`));
@@ -1355,6 +1492,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     if (pollInterval) clearInterval(pollInterval);
     if (timerInterval) clearInterval(timerInterval);
     if (insightInterval) clearInterval(insightInterval);
+    if (questionInterval) clearInterval(questionInterval);
     try { rl?.close(); } catch {}
     ui.teardown();
     cleanup(segmentsDir);
@@ -1564,6 +1702,8 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   let bridgeTick = 0;
   let rosterCtxIndex = -1;
   const knownBridgeParticipants = new Set(calendarAttendees);
+  /** falas das legendas já espelhadas no transcript ao vivo do app */
+  let reportedSpanCount = 0;
   function pollBridge(): void {
     if (!fromBrowser) return;
     bridgeTick++;
@@ -1571,6 +1711,25 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
 
     const bridge = readBridge();
     if (!bridge) return;
+
+    // Legendas → transcript ao vivo do app (nome real por fala). O painel era
+    // só Deepgram ("Remoto N"); com a pausa inteligente do Deepgram, as
+    // legendas assumem como fonte principal também na tela.
+    const spansWithText = (bridge.speech ?? []).filter(sp => sp.text && sp.text.trim());
+    if (spansWithText.length > reportedSpanCount) {
+      reportTranscript(spansWithText.slice(reportedSpanCount).map(sp => ({
+        ts: Math.round(sp.start),
+        speaker: sp.who,
+        text: (sp.text || '').trim(),
+      })));
+      reportedSpanCount = spansWithText.length;
+    }
+
+    // Título corrigido mid-session (o inicial podia ser nome de participante
+    // raspado do document.title do Teams) — em browser mode o topic sempre
+    // veio do bridge, então adotar a correção nunca sobrescreve input humano.
+    const bridgeTitle = (bridge.title ?? '').trim();
+    if (bridgeTitle && bridgeTitle !== topic) topic = bridgeTitle;
 
     const newcomers = bridge.participants.filter(p => !knownBridgeParticipants.has(p));
     if (newcomers.length > 0) {
@@ -1735,6 +1894,58 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   }
   insightInterval = setInterval(maybeRunInsight, 5000);
 
+  // Perguntas sugeridas a cada 5 min: o que VOCÊ pode perguntar agora para
+  // enriquecer a conversa (o que não foi dito, o furo do plano, o dono que
+  // ninguém nomeou). Vai pelo mesmo canal dos insights com a marca
+  // [pergunta] — o app já renderiza badge por tipo. Sem clique nenhum.
+  const QUESTION_EVERY_MS = 5 * 60 * 1000;
+  const QUESTION_MIN_LINES = 8;
+  let lastQuestionAt = startTime;
+  let lastQuestionLineCount = 0;
+  let questionBusy = false;
+
+  async function runSuggestedQuestions(): Promise<void> {
+    if (questionBusy || insightBusy || chatBusy || stopping || paused) return;
+    const spans = fromBrowser
+      ? (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim())
+      : [];
+    const lines = spans.length >= 10
+      ? spans.map(sp => `[${formatTimestamp(sp.start)}] [${sp.who}] ${(sp.text || '').trim()}`)
+      : transcriptLines;
+    if (lines.length - lastQuestionLineCount < QUESTION_MIN_LINES) return;
+    questionBusy = true;
+    const recent = lines.slice(-120).join('\n');
+    lastQuestionLineCount = lines.length;
+    try {
+      const out = await chatWithMeetings([
+        { role: 'system', content:
+          'Voce e o consultor silencioso de quem esta NESTA reuniao. A partir do trecho recente, '
+          + 'sugira NO MAXIMO 2 perguntas que ELE pode fazer AGORA para enriquecer a conversa: '
+          + 'o furo do raciocinio, o risco que ninguem levantou, o dono/prazo que ficou implicito, '
+          + 'o numero que falta. Uma linha cada, formato exato:\n'
+          + '- [pergunta] <a pergunta pronta para ser dita em voz alta>\n'
+          + 'REGRAS: nada obvio nem retorico; nada que ja foi respondido no trecho; se nao houver '
+          + 'pergunta que agregue de verdade, responda exatamente "(sem perguntas)". Sem preambulo.' },
+        { role: 'user', content: recent },
+      ], config);
+      if (out && !/sem perguntas/i.test(out)) {
+        for (const raw of out.split('\n')) {
+          const t = raw.trim();
+          if (t && t !== '-') reportInsight(elapsedSec, t.startsWith('-') ? t : `- [pergunta] ${t}`);
+        }
+      }
+    } catch {
+      // sugestão é bônus — falha não atrapalha a gravação
+    }
+    questionBusy = false;
+  }
+
+  questionInterval = setInterval(() => {
+    if (Date.now() - lastQuestionAt < QUESTION_EVERY_MS) return;
+    lastQuestionAt = Date.now();
+    void runSuggestedQuestions();
+  }, 30_000);
+
   // ── Input handling via TUI ──
   // The new TUI uses raw stdin internally (InputHandler) — no readline needed.
   let rl: { close: () => void } | null = { close() {} };  // stub for cleanup compatibility
@@ -1742,7 +1953,40 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   // Semantic context: injected after first transcription (not upfront) or pre-loaded via topic
 
   function buildSystemMsg(): string {
-    const currentTranscript = transcriptLines.join('\n');
+    // Fonte preferida: legendas do Teams (nomes reais). Em calls longas só a
+    // cauda recente entra — mandar a transcrição INTEIRA a cada pergunta
+    // deixava a resposta lenta (~13s aos 30min) e cara, piorando com o tempo.
+    // Legendas PAUSAM quando o usuário navega fora da tela da call — o trecho
+    // descoberto entra via Deepgram (senão o chat responde "transcript parou
+    // em [12:46]" com a call aos 17min).
+    const CHAT_TAIL_LINES = 300;
+    const spans = fromBrowser
+      ? (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim())
+      : [];
+    const mmssToSec = (l: string) => {
+      const m = l.match(/^\[(\d+):(\d{2})\]/);
+      return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : -1;
+    };
+    let allLines: string[];
+    if (spans.length >= 10) {
+      const spanLines = spans.map(sp => `[${formatTimestamp(sp.start)}] [${sp.who}] ${(sp.text || '').trim()}`);
+      const lastSpanEnd = spans[spans.length - 1].end;
+      const gap = transcriptLines.filter(l => mmssToSec(l) > lastSpanEnd);
+      allLines = gap.length > 0
+        ? [
+            ...spanLines,
+            `[--- legendas pausadas em ${formatTimestamp(lastSpanEnd)} — trecho seguinte via transcricao automatica, speakers genericos ---]`,
+            ...gap,
+          ]
+        : spanLines;
+    } else {
+      allLines = transcriptLines;
+    }
+    const tail = allLines.slice(-CHAT_TAIL_LINES);
+    const omitted = allLines.length - tail.length;
+    const currentTranscript =
+      (omitted > 0 ? `[... ${omitted} falas iniciais omitidas — pergunte sobre o inicio se precisar ...]\n` : '')
+      + tail.join('\n');
     const operatorLine = config.userName
       ? `- Voce esta conversando com ${config.userName}, o operador desta ferramenta (pode ou nao ser um participante da reuniao)`
       : '- Voce esta conversando com o operador desta ferramenta — nao assuma que ele e um dos participantes da transcricao';
@@ -1752,7 +1996,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
 - Responda em portugues BR, de forma concisa e direta (2-4 frases quando possivel)
 - Cruze informacoes da transcricao atual com contexto de reunioes passadas quando relevante
 - Se alguem perguntar "o que foi decidido?", consulte a transcricao E reunioes anteriores sobre o mesmo tema
-- Se a informacao nao esta disponivel, diga "nao encontrei isso na transcricao ou contexto" — nao invente
+- PERGUNTAS GERAIS (tecnicas, conceituais, "como funciona X em Python") sao BEM-VINDAS mesmo sem
+  relacao com a reuniao: responda normalmente com seu conhecimento, como um colega tecnico.
+- A regra "nao invente" vale para AFIRMACOES SOBRE A REUNIAO/VAULT: se a informacao nao esta na
+  transcricao nem no contexto, diga "nao encontrei isso na transcricao ou contexto".
 - Use nomes reais dos participantes quando identificaveis
 ${operatorLine}
 </behavior>\n\n`;

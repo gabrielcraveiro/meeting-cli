@@ -7,6 +7,7 @@ import { requireConfig, Config } from '../config';
 import { getUpcomingMeetings, formatEventTime, CalendarEvent } from '../services/calendar';
 import { notifyWindows } from '../services/notify';
 import { ensureTasksDashboard } from '../services/storage';
+import { resolveClaudeBin, claudeSpawnEnv } from '../services/claudeBin';
 
 // Briefing matinal (Fase 1 do roadmap): o motor claude headless le a agenda de
 // hoje (ICS) + o vault Obsidian e devolve o dia pronto — reunioes com contexto
@@ -137,37 +138,39 @@ function buildBriefingPrompt(config: Config, today: string, agendaPath: string):
     `Voce esta em modo agente com ferramentas READ-ONLY (Read, Grep, Glob).\n</contexto>\n\n` +
     `<workflow>\n` +
     `1. Leia a agenda em ${agendaPath}.\n` +
-    `2. Para CADA reuniao de hoje: use Grep/Glob/Read no vault para achar as ultimas notas com os ` +
-    `mesmos participantes ou o mesmo tema. Traga o que ficou pendente e o contexto que a pessoa ` +
-    `precisa lembrar antes de entrar na call (decisoes anteriores, o que foi prometido, o que travou).\n` +
-    `3. Action items abertos: rode Grep pelo padrao "- [ ] " nas notas do vault (Meetings/ e demais ` +
-    `notas). Cruze com a data de hoje (${today}) e destaque, em ordem: (a) os com 📅 vencido ou ` +
-    `vencendo hoje; (b) os que estao parados ha mais de 7 dias (use a data da nota de origem). ` +
-    `IGNORE tasks ja marcadas ("- [x] ") — elas foram concluidas no Obsidian.\n` +
-    `4. Temas recorrentes sem decisao: assuntos que aparecem em 3+ notas recentes e ainda nao ` +
-    `tem uma decisao registrada. Isso e o que ninguem percebe sozinho — vale ouro.\n` +
+    `2. ONTEM (dia util anterior): leia as notas de reuniao do dia anterior no vault e sintetize ` +
+    `POR ASSUNTO, nao por reuniao — o que foi discutido, o que se decidiu, o que ficou no ar. ` +
+    `Uma narrativa curta, como um colega contando o dia.\n` +
+    `3. HOJE: para cada reuniao da agenda, use Grep/Read no vault (mesmos participantes/tema) e ` +
+    `antecipe QUAL deve ser o assunto e o que vale lembrar antes de entrar — decisoes anteriores, ` +
+    `promessas feitas, onde a conversa parou. Contexto de conversa, NAO lista de tarefas.\n` +
+    `4. PONTOS A NAO ESQUECER: no maximo 5, escolhidos a dedo — decisoes pendentes que voltam hoje, ` +
+    `compromissos que O USUARIO assumiu em voz nas notas recentes, temas que aparecem em 3+ notas ` +
+    `sem decisao registrada. NAO despeje action items: a tela Tarefas ja existe pra isso — se houver ` +
+    `muitos abertos, cite apenas o total em meia linha.\n` +
     `</workflow>\n\n` +
     `<output>\n` +
     `Sua ULTIMA mensagem deve conter APENAS o briefing em markdown, sem preambulo e sem cercas de codigo.\n` +
     `Linha 1: uma linha-resumo do dia com NO MAXIMO 100 caracteres, sem markdown, sem header ` +
-    `(ex: "3 calls, 2 tasks vencidas; elegibilidade sem decisao ha 3 semanas"). Essa linha vai num toast.\n` +
-    `Depois, linha em branco e as secoes com headers ##, so as que tiverem conteudo:\n` +
-    `## Reunioes de hoje — para cada uma: hora, titulo, participantes e 1-3 bullets de contexto/pendencias ` +
-    `do vault, com link [[nome da nota]] quando citar uma reuniao especifica.\n` +
-    `## Pendencias que cobram voce hoje — action items vencidos/vencendo hoje. Formato: ` +
-    `\`- [ ] descricao — 📅 prazo · [[nota de origem]]\`.\n` +
-    `## Parado ha mais de 7 dias — action items sem movimento, com quantos dias.\n` +
-    `## Temas recorrentes sem decisao — tema, quantas vezes voltou, desde quando.\n\n` +
-    `Regras: compacto (o dia inteiro deve caber em uma tela). Sem enfeite, sem "espero que ajude". ` +
-    `Se uma secao nao tiver conteudo real, OMITA — nao escreva "nenhuma pendencia encontrada". ` +
-    `Se o vault estiver praticamente vazio, diga isso em uma linha e pare.\n` +
+    `(ex: "Ontem: crise do WS contida. Hoje: Discovery PIX e 1:1 com Leonel."). Essa linha vai num toast.\n` +
+    `Depois, linha em branco e estas secoes (## headers; omita a que nao tiver conteudo):\n` +
+    `## Ontem — 3-6 frases corridas (ou 3-4 bullets tematicos), sintese POR ASSUNTO do dia anterior ` +
+    `com [[links]] das notas. E leitura de cafe da manha, nao relatorio.\n` +
+    `## Hoje — para cada reuniao da agenda: "**HHhMM Titulo** — o assunto provavel e o que lembrar" ` +
+    `em 1-2 linhas, com [[link]] da nota anterior relacionada quando houver.\n` +
+    `## Nao esqueca — NO MAXIMO 5 bullets escolhidos a dedo (decisao que volta hoje, promessa sua, ` +
+    `tema recorrente sem dono). Se houver muitas tarefas abertas no vault, feche a secao com uma ` +
+    `linha tipo "(+N pendencias na tela Tarefas)" — sem lista-las.\n\n` +
+    `Regras: compacto (uma tela), tom de colega, sem enfeite. NUNCA gere blocos de checkbox "- [ ]" ` +
+    `aqui — briefing e leitura, nao backlog. Se o dia anterior nao teve reunioes, diga em uma linha ` +
+    `e foque no Hoje. Se o vault estiver praticamente vazio, diga isso em uma linha e pare.\n` +
     `</output>`
   );
 }
 
 function runClaude(args: string[], prompt: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(resolveClaudeBin(), args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: claudeSpawnEnv() });
 
     let stdout = '';
     let stderr = '';

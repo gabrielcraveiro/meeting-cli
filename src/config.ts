@@ -31,8 +31,19 @@ export interface Config {
   userName?: string;
   // Speaker name mapping: { "0": "Gabriel", "1": "Ana" }
   speakerNames?: Record<string, string>;
+  // Gravação automática (extensão) só quando o app desktop está aberto —
+  // o daemon considera "aberto" se o app consultou /status nos últimos ~10s.
+  // Default true. false = extensão grava mesmo sem o app.
+  autoRecordRequiresApp?: boolean;
+  // Pausa global de gravação: quando true, o daemon ignora a auto-gravação
+  // detectada pela extensão (nenhuma reunião é capturada) até ser religado.
+  // Persiste em disco para sobreviver a restarts — falha para o lado seguro.
+  recordingPaused?: boolean;
   // Calendar integration
   icsUrl?: string;
+  // Padrões de título (case-insensitive, substring, sem acento) a ignorar na
+  // preparação automática pré-reunião. Default quando ausente: ['daily'].
+  agendaIgnore?: string[];
   // Privacy & compliance
   deleteAudioAfterTranscription?: boolean;  // default true — deletes WAV after note is created
   // Legacy
@@ -89,7 +100,12 @@ const DEFAULT_PROMPT =
   '- SECOES VAZIAS: Omita completamente. NAO escreva "Nenhuma decisao registrada".\n' +
   '- DATAS: A data da reuniao sera informada no contexto. Use-a para converter prazos relativos.\n' +
   '- CONFLITOS: Se houver divergencia de opiniao, registre em "Pontos em Aberto" com ambas posicoes.\n' +
-  '- Responda APENAS com a nota formatada, sem preambulo.\n' +
+  '- Responda APENAS com a nota formatada, sem preambulo. PROIBIDO: comentarios sobre seu proprio ' +
+  'processo, blocos "★ Insight", linhas decorativas de "─", ou qualquer texto antes da Linha 1 (titulo). ' +
+  'O primeiro caractere da resposta e o primeiro caractere do titulo.\n' +
+  '- LEGENDAS PROGRESSIVAS: quando a transcricao vem de legendas, a MESMA fala pode aparecer 2-3 vezes ' +
+  'em linhas consecutivas, crescendo aos poucos (ex: "Ta mas que o projeto..." e depois a versao completa). ' +
+  'Trate essas repeticoes como UMA unica fala — use a versao mais completa e ignore as parciais.\n' +
   '- Portugues do Brasil. Termos tecnicos e nomes proprios em ingles.\n' +
   '- Markdown limpo: sem HTML.\n' +
   '</rules>';

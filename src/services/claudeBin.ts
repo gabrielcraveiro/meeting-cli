@@ -27,3 +27,18 @@ export function resolveClaudeBin(): string {
   cached = 'claude';  // PATH pode resolver em shells interativos
   return cached;
 }
+
+/**
+ * Ambiente para spawnar o claude: garante o diretório do PRÓPRIO node em uso
+ * no PATH. O shim do claude tem shebang `#!/usr/bin/env node` — no cron (e em
+ * qualquer contexto sem profile), achar o binário não basta: o shebang falha
+ * com "/usr/bin/env: 'node': No such file or directory" (caso real: briefing
+ * das 7h40 caindo no fallback sem IA).
+ */
+export function claudeSpawnEnv(): NodeJS.ProcessEnv {
+  const nodeDir = path.dirname(process.execPath);
+  const cur = process.env.PATH ?? '';
+  return cur.split(':').includes(nodeDir)
+    ? process.env
+    : { ...process.env, PATH: `${nodeDir}:${cur}` };
+}
