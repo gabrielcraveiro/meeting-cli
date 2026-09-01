@@ -301,6 +301,53 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
     'http://tauri.localhost', 'https://tauri.localhost' // tauri prod (Windows WebView2)
   ]);
 
+  // Origem da extensão é PINADA na primeira vez (TOFU) e persistida: aceitar
+  // qualquer `moz-extension://` deixava QUALQUER extensão do browser conversar
+  // com o daemon — ler notas (conteúdo corporativo sensível), apagá-las,
+  // iniciar gravação e gastar chamadas de IA. O UUID do Firefox é sorteado por
+  // instalação, então não dá para embutir no código: pina-se o primeiro visto.
+  const EXT_PIN_FILE = path.join(CONFIG_DIR, 'extension-origin.json');
+  let pinnedExtOrigin: string | null | undefined;  // undefined = ainda não lido
+
+  function readPinnedOrigin(): string | null {
+    if (pinnedExtOrigin !== undefined) return pinnedExtOrigin;
+    const fromConfig = cfg()?.extensionOrigin;
+    if (fromConfig) return (pinnedExtOrigin = fromConfig);
+    try {
+      const saved = JSON.parse(fs.readFileSync(EXT_PIN_FILE, 'utf-8'))?.origin;
+      pinnedExtOrigin = typeof saved === 'string' && saved ? saved : null;
+    } catch {
+      pinnedExtOrigin = null;
+    }
+    return pinnedExtOrigin;
+  }
+
+  let lastExtRejectNudge = 0;
+  function isExtensionOriginTrusted(origin: string): boolean {
+    const pinned = readPinnedOrigin();
+    if (!pinned) {
+      pinnedExtOrigin = origin;
+      try {
+        fs.mkdirSync(CONFIG_DIR, { recursive: true });
+        fs.writeFileSync(EXT_PIN_FILE, JSON.stringify({ origin, pinnedAt: Date.now() }, null, 2));
+      } catch {}
+      logLine(chalk.cyan(`  🔒 Extensão confiada (fixada): ${origin}`));
+      return true;
+    }
+    if (pinned === origin) return true;
+    // Reinstalar a extensão troca o UUID no Firefox — falha silenciosa aqui
+    // sairia caro (gravação para de acontecer sem aviso). Avisa e ensina.
+    if (Date.now() - lastExtRejectNudge > 10 * 60_000) {
+      lastExtRejectNudge = Date.now();
+      notifyWindows(
+        '⚠ Extensão não reconhecida',
+        'Uma extensão diferente tentou falar com o Meeting. Se você reinstalou a extensão, apague extension-origin.json em ~/.config/meeting-cli e reinicie o daemon.',
+      );
+    }
+    logLine(chalk.yellow(`  ⚠ Extensão recusada (esperada ${pinned}): ${origin}`));
+    return false;
+  }
+
   function isAllowedOrigin(origin: string | undefined): boolean {
     if (origin === undefined) return true;   // no Origin header = local tool (curl), not a browser
     if (origin === 'null') return false;     // sandboxed iframe / file:// — untrusted
@@ -308,7 +355,10 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
       lastAppSeen = Date.now();  // usado pelo loop de prep pré-reunião: só roda com o app aberto
       return true;
     }
-    return origin.startsWith('moz-extension://') || origin.startsWith('chrome-extension://');
+    if (origin.startsWith('moz-extension://') || origin.startsWith('chrome-extension://')) {
+      return isExtensionOriginTrusted(origin);
+    }
+    return false;
   }
 
   function corsHeaders(origin?: string): Record<string, string> {

@@ -31,6 +31,9 @@ export interface Config {
   userName?: string;
   // Speaker name mapping: { "0": "Gabriel", "1": "Ana" }
   speakerNames?: Record<string, string>;
+  // Origem da extensão autorizada a falar com o daemon (moz-extension://<uuid>).
+  // Em branco = o daemon pina a primeira que aparecer (arquivo extension-origin.json).
+  extensionOrigin?: string;
   // Gravação automática (extensão) só quando o app desktop está aberto —
   // o daemon considera "aberto" se o app consultou /status nos últimos ~10s.
   // Default true. false = extensão grava mesmo sem o app.
