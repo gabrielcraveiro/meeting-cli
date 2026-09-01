@@ -53,12 +53,10 @@ function extractCN(line: string): string | null {
   return m ? m[1].trim() : null;
 }
 
-export async function getUpcomingMeetings(icsUrl: string, windowHours = 2): Promise<CalendarEvent[]> {
-  const raw = await fetchText(icsUrl);
+/** Todos os VEVENTs do ICS, sem filtro de janela — quem chama recorta. */
+function parseIcsEvents(raw: string): CalendarEvent[] {
   const unfolded = unfold(raw);
   const events: CalendarEvent[] = [];
-  const now = new Date();
-  const windowEnd = new Date(now.getTime() + windowHours * 60 * 60 * 1000);
 
   // Split on VEVENT blocks
   const blocks = unfolded.split('BEGIN:VEVENT').slice(1);
@@ -100,14 +98,28 @@ export async function getUpcomingMeetings(icsUrl: string, windowHours = 2): Prom
 
     if (isNaN(start.getTime())) continue;
 
-    // Include events happening now OR starting within the window
-    if (start <= windowEnd && end >= now) {
-      const organizer = props['ORGANIZER'] ? extractCN('X:' + props['ORGANIZER']) ?? undefined : undefined;
-      events.push({ title: props['SUMMARY'], start, end, attendees, organizer });
-    }
+    const organizer = props['ORGANIZER'] ? extractCN('X:' + props['ORGANIZER']) ?? undefined : undefined;
+    events.push({ title: props['SUMMARY'], start, end, attendees, organizer });
   }
 
   return events.sort((a, b) => a.start.getTime() - b.start.getTime());
+}
+
+export async function getUpcomingMeetings(icsUrl: string, windowHours = 2): Promise<CalendarEvent[]> {
+  const raw = await fetchText(icsUrl);
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + windowHours * 60 * 60 * 1000);
+  // acontecendo agora OU começando dentro da janela
+  return parseIcsEvents(raw).filter(e => e.start <= windowEnd && e.end >= now);
+}
+
+/** Eventos de um dia específico (00:00–24:00 local) — inclui dias passados;
+ * alimenta a navegação de agenda por dia no app. */
+export async function getMeetingsForDay(icsUrl: string, day: Date): Promise<CalendarEvent[]> {
+  const raw = await fetchText(icsUrl);
+  const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  return parseIcsEvents(raw).filter(e => e.start < dayEnd && e.end > dayStart);
 }
 
 export function formatEventTime(date: Date): string {

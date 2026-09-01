@@ -13,7 +13,9 @@ import { parseFrontmatter } from './storage';
 // dependência nova no bundle esbuild. Rebuild completo é barato: sem incremental.
 
 const STALE_MS = 5 * 60 * 1000;
-const INDEXED_DIRS = ['Meetings', 'Briefings'];
+// References = base de conhecimento estável (estrutura do time, glossários de
+// domínio); Pessoas = dossiês de 1:1. Ambos respondem perguntas no /ask.
+const INDEXED_DIRS = ['Meetings', 'Briefings', 'References', 'Pessoas', 'Temas'];
 
 /** Peso por campo — título e tags valem mais que corpo. */
 const FIELD_WEIGHT = { title: 5, tags: 3, participants: 2, body: 1 } as const;
@@ -205,6 +207,68 @@ function expand(term: string, terms: string[]): Array<{ term: string; exact: boo
     else if (term.length >= 3 && t.startsWith(term)) out.push({ term: t, exact: false });
   }
   return out;
+}
+
+/** Termo que aparece em MAIS que esta fração das notas não distingue nada
+ * (ex.: "epharma", "reuniao") — vira ruído em busca de contexto. */
+const COMMON_DF_RATIO = 0.25;
+/** Fração da "massa de raridade" do título que a nota precisa cobrir. Abaixo
+ * disso é coincidência de jargão: a nota da Memed casava só "PBM" e virava
+ * contexto de uma reunião com o 99 (bug real). */
+const MIN_TOPIC_COVERAGE = 0.45;
+
+/**
+ * Busca ESTRITA para contexto (prep, pauta da call, notas relacionadas).
+ *
+ * A busca normal casa qualquer termo: um título como "[99+ Epharma] PBM
+ * Meeting" batia em TODA nota que dissesse "epharma"/"pbm" e trazia contexto
+ * de outra reunião (bug real: prep do 99 falando de Memed e Cashback).
+ * Aqui, só entra nota que contenha um termo DISTINTIVO do título — no próprio
+ * título/tags, ou repetido no corpo. Sem termo distintivo na consulta,
+ * devolve vazio: melhor prep sem contexto do que prep errado.
+ */
+/** Termos de uma consulta que realmente identificam o assunto (descarta os
+ * ubíquos do vault). Base compartilhada entre a busca estrita e o filtro de
+ * tarefas do card da call — mesma régua nos dois lugares. */
+export function distinctiveTerms(q: string): string[] {
+  if (!index || index.docs.length === 0) return [];
+  const idx = index;
+  const n = idx.docs.length;
+  return tokenize(q).filter(t => {
+    const df = idx.df.get(t) ?? 0;
+    return df > 0 && df / n < COMMON_DF_RATIO;
+  });
+}
+
+export function searchRelated(q: string, limit = 8): SearchHit[] {
+  if (!index || index.docs.length === 0) return [];
+  const idx = index;
+  const n = idx.docs.length;
+
+  // Termos distintivos + seu peso (idf): "99" pesa muito mais que "pbm" numa
+  // empresa de PBM. Cada termo vale proporcional à sua raridade.
+  const weights = new Map<string, number>();
+  for (const t of tokenize(q)) {
+    const df = idx.df.get(t) ?? 0;
+    if (df === 0 || df / n >= COMMON_DF_RATIO) continue;  // ubíquo = sem sinal
+    weights.set(t, Math.log(1 + n / df));
+  }
+  if (weights.size === 0) return [];
+  const totalMass = [...weights.values()].reduce((a, b) => a + b, 0);
+
+  const byFile = new Map(idx.docs.map(d => [d.file, d]));
+  return search(q, limit * 4)
+    .filter(h => {
+      const doc = byFile.get(h.file);
+      if (!doc) return false;
+      // Só TÍTULO/TAGS contam: menção no corpo é referência de passagem.
+      let matched = 0;
+      for (const [t, w] of weights) {
+        if ((doc.freq.title.get(t) ?? 0) > 0 || (doc.freq.tags.get(t) ?? 0) > 0) matched += w;
+      }
+      return matched / totalMass >= MIN_TOPIC_COVERAGE;
+    })
+    .slice(0, limit);
 }
 
 export function search(q: string, limit = 20): SearchHit[] {

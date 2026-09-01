@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import type { Config } from '../config';
-import { resolveClaudeBin } from './claudeBin';
+import { resolveClaudeBin, claudeSpawnEnv } from './claudeBin';
 
 // Pergunta agêntica ao vault — mesmo motor headless do claudeOrganizer:
 // spawn `claude` em print mode com tools read-only (Read/Grep/Glob) e cwd no
@@ -11,7 +11,7 @@ import { resolveClaudeBin } from './claudeBin';
 // curta, em PT-BR, e termina com uma linha FONTES que resolvemos para paths reais.
 
 const TIMEOUT_MS = 3 * 60 * 1000;
-const SOURCE_DIRS = ['Meetings', 'Briefings'];
+const SOURCE_DIRS = ['Meetings', 'Briefings', 'References', 'Pessoas', 'Temas'];
 
 export interface VaultAnswer {
   answer: string;
@@ -35,8 +35,27 @@ function recentNoteNames(config: Config, limit = 40): string[] {
   return out.sort((a, b) => b.localeCompare(a)).slice(0, limit);
 }
 
-export async function askVault(question: string, config: Config): Promise<VaultAnswer> {
+const MAX_HISTORY_TURNS = 6;
+const MAX_HISTORY_CHARS = 8000;
+
+/** Formata os últimos turnos (Usuário:/Assistente:) truncando por turnos e por chars. */
+function formatHistory(history: Array<{ role: 'user' | 'assistant'; content: string }>): string {
+  const recent = history.slice(-MAX_HISTORY_TURNS);
+  let block = recent.map(h => `${h.role === 'user' ? 'Usuário' : 'Assistente'}: ${h.content}`).join('\n\n');
+  if (block.length > MAX_HISTORY_CHARS) block = block.slice(-MAX_HISTORY_CHARS);
+  return block;
+}
+
+export async function askVault(
+  question: string,
+  config: Config,
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+): Promise<VaultAnswer> {
   const noteList = recentNoteNames(config);
+  const hasHistory = !!history && history.length > 0;
+  const historyBlock = hasHistory
+    ? `\n# Conversa anterior\n${formatHistory(history!)}\n`
+    : '';
   const prompt =
     `Você é o pesquisador do vault de reuniões do usuário (Obsidian). Seu trabalho é responder ` +
     `perguntas sobre o histórico de reuniões usando SOMENTE o que está escrito nas notas.\n\n` +
@@ -57,14 +76,22 @@ export async function askVault(question: string, config: Config): Promise<VaultA
     `FONTES: [[nome-da-nota-1]] | [[nome-da-nota-2]]\n` +
     `Se não usou nenhuma nota, escreva: FONTES:\n` +
     `4. Sem preâmbulo ("vou pesquisar..."), sem cercas de código em volta da resposta.\n` +
-    `</regras>\n\n` +
-    `<pergunta>\n${question}\n</pergunta>\n`;
+    `</regras>\n` +
+    historyBlock +
+    `\n<pergunta>\n${question}\n</pergunta>\n`;
 
+  // Sempre o modelo rápido: /ask é chat interativo — sonnet agêntico levava
+  // ~40-55s por resposta, que na prática lê como "não respondeu". Haiku faz a
+  // mesma pesquisa (Grep/Read) numa fração do tempo; a lista de notas recentes
+  // pré-injetada já poupa os turnos de descoberta.
   const args = [
     '-p',
     '--output-format', 'json',
-    '--model', config.claudeModel || 'claude-sonnet-5',
-    '--max-turns', '25',
+    '--model', config.claudeModelQuick || 'claude-haiku-4-5-20251001',
+    '--max-turns', '12',
+    // Sem settings do usuário: output styles globais poluíam as respostas
+    // (blocos ★ Insight etc.) — mesmo isolamento do claudeOrganizer.
+    '--setting-sources', 'project',
     '--allowedTools', 'Read', 'Grep', 'Glob',
   ];
 
@@ -96,7 +123,7 @@ export async function askVault(question: string, config: Config): Promise<VaultA
 }
 
 /** Separa a linha `FONTES: ...` do corpo; fallback = wikilinks no corpo. */
-function splitSources(text: string): { answer: string; names: string[] } {
+export function splitSources(text: string): { answer: string; names: string[] } {
   const lines = text.split('\n');
   let names: string[] = [];
   let answer = text;
@@ -131,7 +158,7 @@ function extractNames(s: string): string[] {
 }
 
 /** Casa cada nome (basename sem .md, case-insensitive) com um arquivo real do vault. */
-function resolveSources(names: string[], config: Config): Array<{ file: string; title: string }> {
+export function resolveSources(names: string[], config: Config): Array<{ file: string; title: string }> {
   if (names.length === 0) return [];
 
   const byKey = new Map<string, { file: string; title: string }>();
@@ -156,7 +183,7 @@ function resolveSources(names: string[], config: Config): Array<{ file: string; 
 
 function runClaude(args: string[], prompt: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(resolveClaudeBin(), args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(resolveClaudeBin(), args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: claudeSpawnEnv() });
 
     let stdout = '';
     let stderr = '';
