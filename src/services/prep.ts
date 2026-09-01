@@ -202,3 +202,69 @@ ${briefing.trim()}
   fs.writeFileSync(filePath, noteContent);
   return filePath;
 }
+
+// ── Ciclo de vida da prep ────────────────────────────────────────────────
+// A nota de prep é efêmera: serve nos 10 minutos antes da reunião e vira ruído
+// depois (aparece em Recentes, na lateral, na busca). Some por dois caminhos:
+// quando a nota real da reunião nasce (a prep foi superada) e numa faxina das
+// que ficaram para trás. Nunca apaga de verdade — vai para .trash/ do vault,
+// recuperável no Obsidian.
+
+/** Move um arquivo do vault para .trash/, sem sobrescrever homônimo. */
+function moveToTrash(config: Config, absPath: string): boolean {
+  try {
+    const trash = path.join(config.vaultPath, '.trash');
+    fs.mkdirSync(trash, { recursive: true });
+    let dest = path.join(trash, path.basename(absPath));
+    if (fs.existsSync(dest)) dest = path.join(trash, `${Date.now()}-${path.basename(absPath)}`);
+    fs.renameSync(absPath, dest);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Arquiva a prep correspondente a uma reunião que acabou de virar nota:
+ * mesmo dia e horário a até 40min do início. Retorna o nome arquivado.
+ */
+export function archivePrepForNote(config: Config, noteDate: string, noteTime: string): string | null {
+  const dir = path.join(config.vaultPath, 'Meetings');
+  const [h, m] = noteTime.split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  const noteMin = h * 60 + m;
+
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(dir).filter(f => f.startsWith(noteDate) && f.endsWith('(prep).md'));
+  } catch { return null; }
+
+  for (const f of files) {
+    const t = f.match(/^\d{4}-\d{2}-\d{2} (\d{2})-(\d{2}) - /);
+    if (!t) continue;
+    if (Math.abs(+t[1] * 60 + +t[2] - noteMin) > 40) continue;
+    if (moveToTrash(config, path.join(dir, f))) return f;
+  }
+  return null;
+}
+
+/**
+ * Faxina das preps de dias anteriores (a reunião já passou, com ou sem nota).
+ * Roda no boot do daemon e uma vez por dia. Devolve quantas arquivou.
+ */
+export function archiveStalePreps(config: Config): number {
+  const dir = path.join(config.vaultPath, 'Meetings');
+  const today = new Date().toLocaleDateString('sv').slice(0, 10);
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(dir).filter(f => f.endsWith('(prep).md'));
+  } catch { return 0; }
+
+  let n = 0;
+  for (const f of files) {
+    const day = f.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day >= today) continue;  // hoje fica
+    if (moveToTrash(config, path.join(dir, f))) n++;
+  }
+  return n;
+}

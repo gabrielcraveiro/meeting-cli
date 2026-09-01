@@ -13,7 +13,7 @@ import { refreshIfStale, search as searchVault, searchRelated as searchVaultRela
 import { askVault } from '../services/claudeQuery';
 import { askVaultFast } from '../services/quickAsk';
 import { addGlossaryEntry, loadGlossary } from '../services/glossary';
-import { generatePrepNote, isIgnoredMeeting } from '../services/prep';
+import { generatePrepNote, isIgnoredMeeting, archiveStalePreps } from '../services/prep';
 import { listOpenTasks, closeSingleTask } from '../services/taskCloser';
 import { chatWithMeetings } from '../services/organizer';
 import { buildTopicNote, listTopics, suggestTopics } from '../services/topicNotes';
@@ -1436,6 +1436,19 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
     logLine(chalk.gray('  Aguardando a extensão do browser sinalizar entrada em uma call...'));
     logLine(chalk.gray('  Ctrl+C para encerrar.\n'));
     resumeOrphanOrganizeJobs();
+
+    // Preps de dias anteriores viram ruído em Recentes/busca — faxina no boot
+    // e a cada 6h (vão pra .trash, nunca apagadas de verdade).
+    const sweepPreps = () => {
+      const config = cfg();
+      if (!config) return;
+      try {
+        const n = archiveStalePreps(config);
+        if (n > 0) logLine(chalk.gray(`  🧹 ${n} prep(s) de dias anteriores arquivada(s) em .trash`));
+      } catch {}
+    };
+    sweepPreps();
+    setInterval(sweepPreps, 6 * 60 * 60_000).unref?.();
   });
 
   // Jobs de organização órfãos (worker morreu no meio — restart do daemon,

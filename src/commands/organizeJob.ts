@@ -6,6 +6,7 @@ import { createMeetingNote } from '../services/storage';
 import { notifyWindows } from '../services/notify';
 import { applyTaskClosures } from '../services/taskCloser';
 import { appendPersonDigest, detectOneOnOne, extractActionBullets, extractSummary } from '../services/personNotes';
+import { archivePrepForNote } from '../services/prep';
 
 // `meeting organize-job <job.json>` — worker DESTACADO de organização de nota.
 // A sessão do daemon salva o transcript imediatamente (nota provisória) e sai;
@@ -86,6 +87,12 @@ export async function cmdOrganizeJob(jobFile: string): Promise<void> {
       try { fs.unlinkSync(job.placeholderPath); } catch {}
     }
     try { fs.unlinkSync(jobFile); } catch {}
+
+    // A prep desta reunião cumpriu o papel — vai pra .trash (recuperável).
+    try {
+      const archived = archivePrepForNote(config, job.note.date, job.note.time);
+      if (archived) console.log(`[organize-job] prep arquivada: ${archived}`);
+    } catch {}
 
     // Reunião 1:1 → digest acumula na página da pessoa (Pessoas/<Nome>.md),
     // a "nota macro" da relação. A nota da reunião permanece como fonte.
