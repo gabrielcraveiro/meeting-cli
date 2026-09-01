@@ -85,7 +85,10 @@ nosso. Validar sintaxe antes de assinar:
   `backgroundThrottling: "disabled"` no `tauri.conf.json` + janelas de tolerância
   generosas no daemon (ex.: `APP_ALIVE_MS = 5min`, nunca segundos).
 - **Flex + `overflow: hidden`** zera o `min-height` do item: o card do briefing
-  "aparecia e sumia" até ganhar `flex: 0 0 auto`.
+  "aparecia e sumia" até ganhar `flex: 0 0 auto`. Irmão gêmeo: item flex tem
+  `min-width: auto`, então conteúdo com `nowrap` **estoura o `flex-basis`** — a
+  lateral de 260px virou 3225px e zerou o conteúdo até ganhar `min-width: 0`.
+  Ao depurar layout, meça (`offsetWidth`/`getComputedStyle`) em vez de inferir.
 - **Nunca reiniciar o daemon durante uma call.** Padrão usado sempre aqui:
   `until curl -s http://127.0.0.1:7899/status | grep -q '"recording":false'; do sleep 15; done; meeting daemon restart`
 - Vault em `/mnt/c` (drvfs) é lento por arquivo: leia só o frontmatter (primeiros
