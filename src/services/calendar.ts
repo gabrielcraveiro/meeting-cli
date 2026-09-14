@@ -31,19 +31,33 @@ function parseDtLine(dtLine: string): Date {
   return new Date(+yr, +mo - 1, +dy, +hr, +mn, +sc);
 }
 
-function fetchText(url: string): Promise<string> {
+// Sem timeout, um ICS pendurado (DNS do WSL oscilando, proxy que não responde)
+// deixa a promessa viva para sempre: a Home espera "carregando agenda" e o
+// refresh em background nunca solta a trava. Preferimos falhar rápido — quem
+// chama já trata erro servindo o cache anterior.
+const FETCH_TIMEOUT_MS = 15_000;
+const MAX_REDIRECTS = 3;
+
+function fetchText(url: string, redirectsLeft = MAX_REDIRECTS): Promise<string> {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http;
-    mod.get(url, (res) => {
-      // Follow redirects up to 3 hops
+    const req = mod.get(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        fetchText(res.headers.location).then(resolve).catch(reject);
+        res.resume();  // libera o socket antes de seguir o redirect
+        if (redirectsLeft <= 0) { reject(new Error('calendário: redirects demais')); return; }
+        fetchText(res.headers.location, redirectsLeft - 1).then(resolve).catch(reject);
         return;
       }
       let data = '';
       res.on('data', (chunk: string) => { data += chunk; });
       res.on('end', () => resolve(data));
-    }).on('error', reject);
+    });
+    // Cobre conexão parada E download que trava no meio (o timer reinicia a
+    // cada byte recebido, então vale como ociosidade do socket).
+    req.setTimeout(FETCH_TIMEOUT_MS, () => {
+      req.destroy(new Error(`calendário: sem resposta em ${FETCH_TIMEOUT_MS / 1000}s`));
+    });
+    req.on('error', reject);
   });
 }
 
