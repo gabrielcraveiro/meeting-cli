@@ -1478,10 +1478,10 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
   }
 
   // ── Loop de preparação pré-reunião ───────────────────────────────────
-  // A cada 60s: se o app está aberto (heartbeat via Origin nas últimas 5min) e
-  // há um icsUrl configurado, olha a agenda e gera a nota de prep pros eventos
-  // que começam em até 10min. Best-effort: qualquer erro fica só no log, nunca
-  // derruba o daemon.
+  // A cada 60s: se prepEnabled está ligado (default: desligado), o app está aberto
+  // (heartbeat via Origin nas últimas 5min) e há um icsUrl configurado, olha a
+  // agenda e gera a nota de prep pros eventos que começam em até 10min.
+  // Best-effort: qualquer erro fica só no log, nunca derruba o daemon.
   const PREP_CHECK_INTERVAL_MS = 60_000;
   const PREP_LOOKAHEAD_MS = 10 * 60_000;
   const APP_SEEN_WINDOW_MS = 5 * 60_000;
@@ -1489,6 +1489,7 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
   async function runPrepCheck(): Promise<void> {
     const config = cfg();
     if (!config?.icsUrl) return;
+    if (!config.prepEnabled) return;  // opt-in: prep por IA ficava impreciso, então nasce desligado
     if (Date.now() - lastAppSeen >= APP_SEEN_WINDOW_MS) return;  // requisito: só com o app aberto
     if (preppingNow) return;
 

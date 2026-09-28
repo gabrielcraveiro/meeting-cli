@@ -59,7 +59,7 @@ export async function cmdOrganizeJob(jobFile: string): Promise<void> {
     }
 
     const aiModelLabel = result.engine === 'claude'
-      ? (config.claudeModel || 'claude-sonnet-5')
+      ? (config.claudeModel || 'claude-sonnet-5-5')
       : (config.chatModel || 'gpt-4o-mini');
 
     const notePath = await createMeetingNote(config, {

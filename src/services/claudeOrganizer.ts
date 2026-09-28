@@ -148,7 +148,7 @@ export async function organizeWithClaude(
   const args = [
     '-p',
     '--output-format', 'json',
-    '--model', config.claudeModel || 'claude-sonnet-5',
+    '--model', config.claudeModel || 'claude-sonnet-5-5',
     '--max-turns', '25',
     // Sem settings do usuário: output styles globais (ex.: "Explanatory" com
     // blocos ★ Insight) vazavam pra dentro da nota e bagunçavam o título.

@@ -109,7 +109,7 @@ async function runBriefingWithClaude(
     const args = [
       '-p',
       '--output-format', 'json',
-      '--model', config.claudeModel || 'claude-sonnet-5',
+      '--model', config.claudeModel || 'claude-sonnet-5-5',
       '--max-turns', '25',
       '--allowedTools', 'Read', 'Grep', 'Glob',
       '--add-dir', tmpDir,

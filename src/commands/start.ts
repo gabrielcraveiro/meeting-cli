@@ -1308,7 +1308,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       const noteTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       const keepAudio = config.deleteAudioAfterTranscription === false;
       const aiModelLabel = config.organizerEngine === 'claude'
-        ? (config.claudeModel || 'claude-sonnet-5')
+        ? (config.claudeModel || 'claude-sonnet-5-5')
         : (config.chatModel || 'gpt-4o-mini');
 
       const placeholderPath = await createMeetingNote(config, {

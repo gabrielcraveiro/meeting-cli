@@ -189,7 +189,7 @@ program
     console.log(`  ${chalk.bold('Deepgram')}    ${cfg.deepgramModel || 'nova-2'} | key: ${cfg.deepgramApiKey ? '***' + cfg.deepgramApiKey.slice(-4) : chalk.red('(não configurado)')}`);
     console.log(`  ${chalk.bold('Chat')}        ${cfg.chatModel || 'gpt-4o-mini'} @ ${(cfg.chatEndpoint || '').slice(0, 40)}`);
     const engine = cfg.organizerEngine === 'claude'
-      ? chalk.green(`claude (${cfg.claudeModel || 'claude-sonnet-5'})`)
+      ? chalk.green(`claude (${cfg.claudeModel || 'claude-sonnet-5-5'})`)
       : `chat (${cfg.chatModel || 'gpt-4o-mini'})`;
     console.log(`  ${chalk.bold('Organizer')}   ${engine}`);
     console.log('');

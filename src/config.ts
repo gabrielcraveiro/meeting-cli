@@ -20,7 +20,7 @@ export interface Config {
   // Note organization engine: 'chat' (default, single LiteLLM completion) or
   // 'claude' (Claude Code CLI headless with read-only vault research tools)
   organizerEngine?: 'chat' | 'claude';
-  claudeModel?: string;  // model for deep passes: final note, briefing, /ask (default: claude-sonnet-5)
+  claudeModel?: string;  // model for deep passes: final note, briefing, /ask (default: claude-sonnet-5-5)
   // Fast lane (live chat, insights, live enhance) — small model, seconds not minutes
   claudeModelQuick?: string;  // default: claude-haiku-4-5-20251001
   // Final transcript source for browser-bridge sessions:
@@ -44,6 +44,10 @@ export interface Config {
   recordingPaused?: boolean;
   // Calendar integration
   icsUrl?: string;
+  // Liga o gerador automático de nota de prep pré-reunião. Default (ausente):
+  // DESLIGADO — a prep gerada por IA se mostrou pouco confiável na prática, então
+  // é opt-in. Desligar NÃO afeta a exibição da agenda (que depende só de icsUrl).
+  prepEnabled?: boolean;
   // Padrões de título (case-insensitive, substring, sem acento) a ignorar na
   // preparação automática pré-reunião. Default quando ausente: ['daily'].
   agendaIgnore?: string[];
