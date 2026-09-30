@@ -22,6 +22,9 @@ const INSIGHT_KINDS: Record<string, { label: string; cls: string }> = {
   pendencia: { label: 'pendência', cls: 'kind-risco' },
   info: { label: 'info', cls: 'kind-info' },
   pergunta: { label: 'pergunte', cls: 'kind-pergunta' },
+  // decisão em aberto + quem decide: o que a conversa assumiu sem ninguém ter
+  // o mandato de decidir. Tom de risco porque vira retrabalho se passar batido.
+  decidir: { label: 'a decidir', cls: 'kind-risco' },
 };
 
 function parseInsight(text: string): { kind?: { label: string; cls: string }; body: string } {
