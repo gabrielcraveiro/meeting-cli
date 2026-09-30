@@ -92,6 +92,35 @@ function topicNotes(config: Config, topic: string): Array<{ file: string; title:
 }
 
 /**
+ * Deixa a saída do modelo segura para o vault.
+ *
+ * - Wikilink que não aponta para uma nota existente: o modelo trunca o nome
+ *   ("[[2026-03-31 11-08]]") ou inventa conceito ("[[Blip]]"). Resolve por
+ *   prefixo único do nome do arquivo; sem resolução, vira texto simples.
+ * - Nome da empresa: sempre "epharma". Só fora dos wikilinks — dentro deles é
+ *   nome de arquivo, e trocar quebraria o link.
+ *
+ * Exported for the one-off repair of hubs generated before this fix.
+ */
+export function sanitizeTopicMarkdown(md: string, noteNames: string[]): string {
+  const names = new Set(noteNames);
+  const withLinks = md.replace(/\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]/g, (_m, target: string, anchor = '', label?: string) => {
+    const t = target.trim();
+    let resolved = names.has(t) ? t : '';
+    if (!resolved) {
+      const byPrefix = noteNames.filter(n => n.startsWith(t));
+      if (byPrefix.length === 1) resolved = byPrefix[0];
+    }
+    if (!resolved) return label?.trim() || t;
+    return `[[${resolved}${anchor}|${(label ?? t).trim()}]]`;
+  });
+  return withLinks
+    .split(/(\[\[[^\]]*\]\])/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/(?<![\p{L}\p{N}])[eé]pharma(?![\p{L}\p{N}])/giu, 'epharma')))
+    .join('');
+}
+
+/**
  * Cria/atualiza Temas/<Tema>.md. Retorna skipped=true quando não havia nota
  * nova (nenhuma chamada ao modelo).
  */
@@ -121,7 +150,10 @@ export async function buildTopicNote(config: Config, topic: string): Promise<Top
     try { content = organizedPart(fs.readFileSync(path.join(config.vaultPath, n.file), 'utf-8')); } catch { continue; }
     if (!content) continue;
     const day = n.date || n.file.slice(9, 19);
-    byDay.set(day, [...(byDay.get(day) ?? []), `[[${n.title}]]\n${content}`]);
+    // Link pelo NOME DO ARQUIVO, com o título como rótulo: o arquivo tem data e
+    // hora na frente, então [[título]] sozinho não abria no Obsidian.
+    const link = `[[${path.basename(n.file, '.md')}|${n.title.replace(/[|\]]/g, '-')}]]`;
+    byDay.set(day, [...(byDay.get(day) ?? []), `${link}\n${content}`]);
   }
   if (byDay.size === 0) {
     return { file: `Temas/${path.basename(file)}`, added: 0, skipped: true };
@@ -142,7 +174,9 @@ export async function buildTopicNote(config: Config, topic: string): Promise<Top
     + '## Porques — 2-4 bullets de razoes/trade-offs que se perdem entre reunioes.\n'
     + 'REGRAS: consolide, nao acumule — se a versao anterior da nota macro for dada, REESCREVA-A '
     + 'integrando o novo (decisao nova SUBSTITUI a antiga; mencione a mudanca se foi reversao). '
-    + 'Nao invente. Sem preambulo. Nao repita a mesma informacao em duas secoes.';
+    + 'Nao invente. Sem preambulo. Nao repita a mesma informacao em duas secoes. '
+    + 'Copie os wikilinks EXATAMENTE como vieram ([[arquivo|titulo]]). '
+    + 'O nome da empresa e "epharma", sempre minusculo e sem acento.';
 
   const user =
     (existingBody ? `# Nota macro atual (reescreva integrando o novo)\n${existingBody}\n\n` : '')
@@ -153,13 +187,16 @@ export async function buildTopicNote(config: Config, topic: string): Promise<Top
     config,
   )).trim();
   if (!out) throw new Error('modelo retornou vazio');
+  const noteNames = fs.readdirSync(path.join(config.vaultPath, 'Meetings'))
+    .filter(f => f.endsWith('.md')).map(f => f.replace(/\.md$/, ''));
+  const safe = sanitizeTopicMarkdown(out, noteNames);
 
   const sources = [...already, ...fresh.map(n => n.file)];
   const today = new Date().toLocaleDateString('sv').slice(0, 10);
   const note =
     `---\ntype: tema\ntitle: "${topic}"\ntags: [tema]\nupdated: ${today}\n`
     + `sources_count: ${sources.length}\n---\n`
-    + `# ${topic}\n\n${out}\n\n`
+    + `# ${topic}\n\n${safe}\n\n`
     + `<!--meeting-cli:topic-sources\n${sources.join('\n')}\n-->\n`;
 
   fs.mkdirSync(dir, { recursive: true });
