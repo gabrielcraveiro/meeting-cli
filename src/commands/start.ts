@@ -17,6 +17,7 @@ import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
 import { matchSpeaker, enrollSpeaker } from '../services/voice';
 import { readBridge, readCaptionSpans } from '../services/bridge';
 import { collapseCaptionRevisions } from '../services/captionRevisions';
+import { loadThemes, resolveThemes } from '../services/themes';
 import { applyGlossary, glossaryPromptBlock } from '../services/glossary';
 import { applyTaskClosures } from '../services/taskCloser';
 import { notifyWindows } from '../services/notify';
@@ -1346,6 +1347,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
           extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
           userNotes: userNotes.length > 0 ? userNotes : undefined,
           series: topic || undefined,
+          themes: loadThemes(config),
         },
         note: {
           audioPath: keepAudio ? `Recordings/${finalAudioName}` : undefined,
@@ -1382,6 +1384,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
         extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
         userNotes: userNotes.length > 0 ? userNotes : undefined,
         series: topic || undefined,
+        themes: loadThemes(config),
       });
       summary = result.text;
       chatCost = result.costUsd;
@@ -1402,6 +1405,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     let meetingTitle = parsed.title;
     const participants = parsed.participants;
     const detectedTags = parsed.tags;
+    const themes = resolveThemes(parsed.themes, loadThemes(config));
     // Fechamento de pendências: propostas do agente validadas/aplicadas em código
     const closure = applyTaskClosures(config, parsed.body, date);
     summary = closure.summary;
@@ -1450,6 +1454,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       meetingType: templateName,
       sourceNotes: userNotes.length > 0,
       series: topic || undefined,
+      themes,
     });
     s.success({ text: path.basename(notePath) });
 

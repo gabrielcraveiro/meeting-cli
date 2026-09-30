@@ -85,6 +85,7 @@ export interface OrganizeOptions {
   extraContext?: string;    // additional context (past meetings, etc.)
   userNotes?: UserNote[];   // anotações do usuário ao vivo — ESQUELETO da nota final
   series?: string;          // título do calendário/Teams — acha as notas irmãs da série
+  themes?: Array<{ name: string; hint: string }>;  // vocabulário de meeting-temas.md
 }
 
 /**
@@ -154,6 +155,8 @@ export interface ParsedSummary {
   title: string;
   participants: string[];
   tags: string[];
+  /** linha "Temas: ..." como veio — valide com resolveThemes antes de gravar */
+  themes: string[];
   /** corpo da nota sem titulo/participantes/linha de tags */
   body: string;
 }
@@ -237,6 +240,12 @@ export function parseOrganizedSummary(raw: string): ParsedSummary {
     }
   }
   let body = lines.join('\n').replace(/^\n+/, '');
+  const themes: string[] = [];
+  const themeMatch = body.match(/^Temas:\s*(.*)$/mi);
+  if (themeMatch) {
+    for (const t of themeMatch[1].split(',')) if (t.trim() && !/^\(?nenhum/i.test(t.trim())) themes.push(t.trim());
+    body = body.replace(/\n*^Temas:\s*.*$/mi, '').trim();
+  }
   const tagMatch = body.match(/^Tags:\s*(.+)$/mi);
   if (tagMatch) {
     for (const t of tagMatch[1].split(',')) {
@@ -245,7 +254,7 @@ export function parseOrganizedSummary(raw: string): ParsedSummary {
     }
     body = body.replace(/\n*Tags:\s*.+$/mi, '').trim();
   }
-  return { title, participants, tags, body };
+  return { title, participants, tags, themes, body };
 }
 
 /**

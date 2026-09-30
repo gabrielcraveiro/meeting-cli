@@ -168,6 +168,8 @@ export async function createMeetingNote(
     sourceNotes?: boolean;
     /** Título do calendário/Teams; vira `series:` (ver services/series.ts) */
     series?: string;
+    /** Temas já validados contra meeting-temas.md. `[]` = classificada, sem tema. */
+    themes?: string[];
   }
 ): Promise<string> {
   const meetingsDir = path.join(config.vaultPath, 'Meetings');
@@ -187,6 +189,8 @@ export async function createMeetingNote(
   const sourceNotesLine = params.sourceNotes ? '\nsourceNotes: true' : '';
   const series = seriesKey(params.series);
   const seriesLine = series ? `\nseries: "${series.replace(/"/g, "'")}"` : '';
+  // undefined = não classificada (não escreve o campo); [] = classificada, sem tema.
+  const themesLine = params.themes ? `\ntemas: [${params.themes.join(', ')}]` : '';
   const audioEmbed = params.audioPath ? `![[${params.audioPath}]]\n` : '';
 
   const content = `---
@@ -195,7 +199,7 @@ meeting_type: ${meetingType}
 tags: [${allTags.join(', ')}]${participantsList}${sourceNotesLine}
 date: ${params.date}
 time: ${params.time}
-title: "${title}"${seriesLine}
+title: "${title}"${seriesLine}${themesLine}
 status: done
 audio_seconds: ${Math.round(params.durationSec)}
 audio_deleted: ${!params.audioPath}

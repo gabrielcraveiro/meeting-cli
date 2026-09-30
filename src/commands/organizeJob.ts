@@ -6,6 +6,8 @@ import { createMeetingNote } from '../services/storage';
 import { notifyWindows } from '../services/notify';
 import { applyTaskClosures } from '../services/taskCloser';
 import { appendPersonDigest, detectOneOnOne, extractActionBullets, extractSummary } from '../services/personNotes';
+import { loadThemes, resolveThemes } from '../services/themes';
+import { buildTopicNote } from '../services/topicNotes';
 import { archivePrepForNote } from '../services/prep';
 
 // `meeting organize-job <job.json>` — worker DESTACADO de organização de nota.
@@ -58,6 +60,9 @@ export async function cmdOrganizeJob(jobFile: string): Promise<void> {
       title = job.note.topic || 'Reuniao';
     }
 
+    // Só entra tema do vocabulário: o modelo às vezes inventa um nome parecido.
+    const themes = resolveThemes(parsed.themes, loadThemes(config));
+
     const aiModelLabel = result.engine === 'claude'
       ? (config.claudeModel || 'claude-sonnet-5-5')
       : (config.chatModel || 'gpt-4o-mini');
@@ -81,6 +86,7 @@ export async function cmdOrganizeJob(jobFile: string): Promise<void> {
       meetingType: job.note.meetingType,
       sourceNotes: job.note.sourceNotes,
       series: job.options?.series || job.note.topic,
+      themes,
     });
 
     // A definitiva substitui a provisória (a menos que tenham caído no mesmo path)
@@ -94,6 +100,17 @@ export async function cmdOrganizeJob(jobFile: string): Promise<void> {
       const archived = archivePrepForNote(config, job.note.date, job.note.time);
       if (archived) console.log(`[organize-job] prep arquivada: ${archived}`);
     } catch {}
+
+    // Hub do tema (Temas/<Tema>.md) incorpora a nota nova. Incremental: uma
+    // chamada ao modelo barato por tema, só com as notas que ainda não entraram.
+    for (const theme of themes) {
+      try {
+        const r = await buildTopicNote(config, theme);
+        if (!r.skipped) console.log(`[organize-job] tema atualizado: ${r.file} (+${r.added})`);
+      } catch (err) {
+        console.log(`[organize-job] tema ${theme} não atualizou: ${(err as Error).message}`);
+      }
+    }
 
     // Reunião 1:1 → digest acumula na página da pessoa (Pessoas/<Nome>.md),
     // a "nota macro" da relação. A nota da reunião permanece como fonte.

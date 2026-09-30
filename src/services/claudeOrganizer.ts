@@ -142,6 +142,13 @@ export async function organizeWithClaude(
     `omita "· aguardando: …" se ninguém foi nomeado.\n` +
     `   • Não é assunto: o que foi decidido e encerrado, status informativo, action item do usuário ` +
     `(esse vai no passo 5). MÁXIMO 6 por reunião; nenhum → omita a seção.\n` +
+    (options?.themes?.length
+      ? `4e. TEMA — classifique a reunião com ATÉ 2 temas desta lista FECHADA (nome exato; a descrição ` +
+        `só orienta):\n${options.themes.map(t => `   - ${t.name}: ${t.hint}`).join('\n')}\n` +
+        `   Escolha pelo ASSUNTO CENTRAL, não por menção de passagem (uma daily que cita o Pix uma vez ` +
+        `não é do tema Pix). Na dúvida, nenhum. Emita como ÚLTIMA linha da nota: \`Temas: Nome1, Nome2\` ` +
+        `ou \`Temas: nenhum\`.\n`
+      : '') +
     `5. ACTION ITEMS SÃO RAROS E CAROS — critério duro (aprendido no uso: dezenas de tasks ` +
     `geradas viram lista morta que ninguém revê):\n` +
     `   • Só vira task o que alguém ASSUMIU explicitamente em voz ("eu faço", "pode deixar comigo", ` +

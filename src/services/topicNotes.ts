@@ -3,6 +3,7 @@ import * as path from 'path';
 import type { Config } from '../config';
 import { refreshIfStale, search } from './vaultIndex';
 import { chatWithMeetings } from './organizer';
+import { noteThemes } from './themes';
 
 // Nota macro por tema: Temas/<Tema>.md consolida o que se sabe sobre um assunto
 // que se espalhou por dezenas de reuniões (ex.: "autorizador" tem 88 notas).
@@ -42,13 +43,52 @@ function organizedPart(raw: string): string {
   return body.length > PER_NOTE_CHARS ? `${body.slice(0, PER_NOTE_CHARS)}…` : body;
 }
 
-/** Notas do vault que pertencem ao tema, mais recentes primeiro. */
+/** Frontmatter basta para saber o tema; o vault em drvfs é lento para ler inteiro. */
+const FRONTMATTER_BYTES = 2048;
+
+function readFrontmatter(abs: string): string {
+  const fd = fs.openSync(abs, 'r');
+  try {
+    const buf = Buffer.alloc(FRONTMATTER_BYTES);
+    const n = fs.readSync(fd, buf, 0, FRONTMATTER_BYTES, 0);
+    return buf.subarray(0, n).toString('utf-8').match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Notas do vault que pertencem ao tema, mais recentes primeiro.
+ *
+ * Nota classificada (`temas:` no frontmatter) entra só se o tema estiver na
+ * lista dela — é a fonte confiável. Nota antiga, sem o campo, ainda entra pela
+ * busca léxica, até o preenchimento retroativo classificar o vault inteiro.
+ */
 function topicNotes(config: Config, topic: string): Array<{ file: string; title: string; date: string }> {
+  const dir = path.join(config.vaultPath, 'Meetings');
+  const wanted = topic.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const byTag: Array<{ file: string; title: string; date: string }> = [];
+  const unclassified = new Set<string>();
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.md') || name.includes('(prep)')) continue;
+    let fm = '';
+    try { fm = readFrontmatter(path.join(dir, name)); } catch { continue; }
+    const themes = noteThemes(fm);
+    if (themes === null) { unclassified.add(`Meetings/${name}`); continue; }
+    if (!themes.some(t => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() === wanted)) continue;
+    byTag.push({
+      file: `Meetings/${name}`,
+      title: (fm.match(/^title:\s*"?(.*?)"?\s*$/m)?.[1] ?? name.replace(/\.md$/, '')).trim(),
+      date: fm.match(/^date:\s*(\S+)/m)?.[1] ?? '',
+    });
+  }
+
   refreshIfStale(config);
-  return search(topic, MAX_HITS)
-    .filter(h => h.file.startsWith('Meetings/') && !h.file.includes('(prep)'))
-    .map(h => ({ file: h.file, title: h.title, date: h.date }))
-    .sort((a, b) => b.file.localeCompare(a.file));
+  const lexical = search(topic, MAX_HITS)
+    .filter(h => unclassified.has(h.file))
+    .map(h => ({ file: h.file, title: h.title, date: h.date }));
+
+  return [...byTag, ...lexical].sort((a, b) => b.file.localeCompare(a.file));
 }
 
 /**
