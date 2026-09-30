@@ -105,10 +105,12 @@ function topicNotes(config: Config, topic: string): Array<{ file: string; title:
 export function sanitizeTopicMarkdown(md: string, noteNames: string[]): string {
   const names = new Set(noteNames);
   const withLinks = md.replace(/\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]/g, (_m, target: string, anchor = '', label?: string) => {
+    // Sem trim no primeiro teste: o nome do arquivo é cortado em 60 caracteres
+    // e às vezes termina em espaço ("… Segurança da .md").
     const t = target.trim();
-    let resolved = names.has(t) ? t : '';
+    let resolved = names.has(target) ? target : names.has(t) ? t : '';
     if (!resolved) {
-      const byPrefix = noteNames.filter(n => n.startsWith(t));
+      const byPrefix = noteNames.filter(n => n.startsWith(t) || n.trim() === t);
       if (byPrefix.length === 1) resolved = byPrefix[0];
     }
     if (!resolved) return label?.trim() || t;
