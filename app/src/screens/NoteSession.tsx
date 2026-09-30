@@ -398,11 +398,34 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
   };
   const [pauta, setPauta] = useState<Pauta | null>(null);
   const [pautaDismissed, setPautaDismissed] = useState(false);
+  /** Tarefas fechadas no card: "isso já foi feito" dito na call vira baixa na
+   * nota de origem ali mesmo, sem ter que lembrar depois na tela Tarefas. */
+  const [pautaClosed, setPautaClosed] = useState<Set<string>>(new Set());
+  const [pautaCloseError, setPautaCloseError] = useState<string | null>(null);
+
+  const closePautaTask = async (t: OpenTask) => {
+    const key = `${t.file}|${t.line}`;
+    if (pautaClosed.has(key)) return;
+    setPautaClosed((prev) => new Set(prev).add(key));
+    setPautaCloseError(null);
+    try {
+      await api.taskClose(t.file, t.line);
+    } catch (err) {
+      setPautaCloseError(friendlyError(err));
+      setPautaClosed((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     let alive = true;
     setPauta(null);
     setPautaDismissed(false);
+    setPautaClosed(new Set());
+    setPautaCloseError(null);
     const fetchPauta = async (): Promise<boolean> => {
       try {
         const r = await api.sessionPauta();
@@ -520,13 +543,27 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
             )}
             {pauta.tasks.length > 0 && (
               <ul className="pauta-list">
-                {pauta.tasks.slice(0, 5).map((t) => (
-                  <li key={`${t.file}|${t.line}`}>
-                    {t.owner ? <strong>{t.owner}: </strong> : <strong>você: </strong>}
-                    {t.text}
-                    {t.due && <span className="pauta-due"> · 📅 {t.due}</span>}
-                  </li>
-                ))}
+                {pauta.tasks.slice(0, 5).map((t) => {
+                  const done = pautaClosed.has(`${t.file}|${t.line}`);
+                  return (
+                    <li key={`${t.file}|${t.line}`} className={`pauta-task ${done ? 'is-done' : ''}`}>
+                      <input
+                        type="checkbox"
+                        className="task-check"
+                        checked={done}
+                        disabled={done}
+                        onChange={() => void closePautaTask(t)}
+                        aria-label={`Concluir: ${t.text}`}
+                        title={`Concluir (marca na nota "${t.noteTitle}")`}
+                      />
+                      <span>
+                        {t.owner ? <strong>{t.owner}: </strong> : <strong>você: </strong>}
+                        {t.text}
+                        {t.due && <span className="pauta-due"> · 📅 {t.due}</span>}
+                      </span>
+                    </li>
+                  );
+                })}
                 {pauta.tasks.length > 5 && (
                   <li className="pauta-more">
                     <button className="pauta-link" onClick={onOpenTasks}>
@@ -536,6 +573,7 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
                 )}
               </ul>
             )}
+            {pautaCloseError && <p className="pauta-error">Não consegui fechar: {pautaCloseError}</p>}
             {pauta.related.length > 0 && (
               <p className="pauta-related">
                 Reuniões anteriores: {pauta.related.map((r) => r.title).join(' · ')}

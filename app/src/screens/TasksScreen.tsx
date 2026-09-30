@@ -11,6 +11,15 @@ type Props = {
 const taskKey = (t: OpenTask) => `${t.file}|${t.line}`;
 /** tempo do risco no texto antes do item sair da lista */
 const CLOSE_ANIM_MS = 450;
+/** Tarefa de reunião com mais de 14 dias e sem prazo pela frente quase sempre
+ * já foi feita (ou morreu) sem ninguém marcar. Ela sai da lista principal e vai
+ * para "Antigas", onde dá para fechar tudo de uma vez. Não somem do vault. */
+const STALE_DAYS = 14;
+
+function isStale(t: OpenTask, today: string, cutoff: string): boolean {
+  const upcoming = !!t.due && t.due >= today;
+  return !upcoming && !!t.noteDate && t.noteDate < cutoff;
+}
 
 /** Agregado dos action items abertos de todas as reuniões. "Com você" vem
  * primeiro (tarefa sem dono = sua, convenção do organizador); delegadas
@@ -21,6 +30,10 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
   const [error, setError] = useState<string | null>(null);
   /** flip em andamento — item fica riscado até sair da lista */
   const [closing, setClosing] = useState<Set<string>>(new Set());
+  const [showStale, setShowStale] = useState(false);
+  /** 1º clique arma, 2º confirma — fechar em lote grava em várias notas */
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -59,9 +72,25 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
   };
 
   const today = new Date().toLocaleDateString('sv').slice(0, 10);
-  const mine = (tasks ?? []).filter((t) => t.mine);
-  const others = (tasks ?? []).filter((t) => !t.mine);
-  const overdueCount = (tasks ?? []).filter((t) => !!t.due && t.due < today).length;
+  const cutoff = new Date(Date.now() - STALE_DAYS * 86_400_000).toLocaleDateString('sv').slice(0, 10);
+  const stale = (tasks ?? []).filter((t) => isStale(t, today, cutoff));
+  const fresh = (tasks ?? []).filter((t) => !isStale(t, today, cutoff));
+  const mine = fresh.filter((t) => t.mine);
+  const others = fresh.filter((t) => !t.mine);
+  const overdueCount = fresh.filter((t) => !!t.due && t.due < today).length;
+
+  const closeAllStale = async () => {
+    if (!confirmBulk) {
+      setConfirmBulk(true);
+      return;
+    }
+    setConfirmBulk(false);
+    setBulkBusy(true);
+    // Uma por vez: cada fechamento reescreve uma nota no vault (drvfs lento), e
+    // em paralelo duas tarefas da mesma nota brigariam pelo mesmo arquivo.
+    for (const t of stale) await close(t);
+    setBulkBusy(false);
+  };
 
   // Delegadas agrupadas por responsável, quem tem mais tarefas primeiro
   const byOwner = new Map<string, OpenTask[]>();
@@ -125,7 +154,8 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
         <h1 className="chat-title">Tarefas</h1>
         {tasks !== null && tasks.length > 0 && (
           <span className="tasks-count">
-            {tasks.length} abertas{overdueCount > 0 ? ` · ${overdueCount} vencidas` : ''}
+            {fresh.length} abertas{overdueCount > 0 ? ` · ${overdueCount} vencidas` : ''}
+            {stale.length > 0 ? ` · ${stale.length} antigas` : ''}
           </span>
         )}
       </header>
@@ -161,6 +191,32 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
                 <ul className="tasks-list">{list.map((t) => renderItem(t, false))}</ul>
               </section>
             ))}
+
+            {stale.length > 0 && (
+              <section className="task-group task-group-stale">
+                <div className="task-stale-head">
+                  <button
+                    className="task-stale-toggle"
+                    onClick={() => setShowStale((v) => !v)}
+                    aria-expanded={showStale}
+                  >
+                    {showStale ? '▾' : '▸'} Antigas (+{STALE_DAYS} dias, sem prazo à frente){' '}
+                    <span className="task-group-count">{stale.length}</span>
+                  </button>
+                  <button
+                    className={`task-stale-close ${confirmBulk ? 'is-armed' : ''}`}
+                    onClick={() => void closeAllStale()}
+                    onBlur={() => setConfirmBulk(false)}
+                    disabled={bulkBusy}
+                  >
+                    {bulkBusy ? 'Fechando…' : confirmBulk ? `Confirmar: fechar ${stale.length}?` : 'Fechar todas'}
+                  </button>
+                </div>
+                {showStale && (
+                  <ul className="tasks-list">{stale.map((t) => renderItem(t, true))}</ul>
+                )}
+              </section>
+            )}
           </>
         )}
       </div>

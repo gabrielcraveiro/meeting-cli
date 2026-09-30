@@ -2989,3 +2989,94 @@ button:disabled {
 .app.is-wide .prose-editorial {
   max-width: 760px;
 }
+
+/* ── Pauta: fechar tarefa durante a call ──────────────────────────────── */
+
+.pauta-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.pauta-task .task-check {
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+}
+
+.pauta-task.is-done > span {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+
+.pauta-task.is-done strong {
+  color: inherit;
+}
+
+.pauta-error {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--danger-ink);
+}
+
+/* ── Tarefas: grupo "Antigas" (recolhido, fecha em lote) ──────────────── */
+
+.task-group-stale {
+  margin-top: 22px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.task-stale-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+}
+
+.task-stale-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+
+.task-stale-toggle:hover {
+  color: var(--ink-soft);
+}
+
+.task-stale-close {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.task-stale-close:hover:not(:disabled) {
+  background: var(--cream-deep);
+}
+
+/* armado = o próximo clique grava em várias notas; cor de atenção */
+.task-stale-close.is-armed {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+
+.task-stale-close:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
