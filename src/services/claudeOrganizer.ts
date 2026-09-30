@@ -125,9 +125,11 @@ export async function organizeWithClaude(
     `"vou mandar até sexta") — com dono claro e entregável concreto.\n` +
     `   • "Precisamos de X", "seria bom ver Y", ideia solta, tema pra próxima reunião: NÃO é task ` +
     `— vai para Pontos Principais ou fica de fora.\n` +
-    `   • POSSE: o vault é do usuário — ação de TERCEIRO só vira task se envolver o usuário ` +
-    `diretamente (ele pediu e a pessoa aceitou, ou a entrega é PARA ele). Combinado de terceiros ` +
-    `entre si ("Fulano vai ajudar Ciclano") NÃO é task dele — registre como Ponto, se relevante.\n` +
+    `   • POSSE: só vira task o que é DO USUÁRIO que gravou — ele assumiu, ou pediram a ele e ele ` +
+    `aceitou. Ação de TERCEIRO nunca vira task, nem quando a entrega é para o usuário (a lista de ` +
+    `tarefas dele virava a fila de todo mundo). Entrega de terceiro para o usuário vai em Pontos ` +
+    `Principais como "aguardando <Nome>: <o quê>"; combinado de terceiros entre si fica de fora ` +
+    `ou vira Ponto, se relevante.\n` +
     `   • MÁXIMO 5 tasks por reunião; se mais de 5 candidatas, escolha as 5 com dono+prazo mais ` +
     `claros. Na dúvida, corte.\n` +
     `   Na seção de action items, além da tabela, emita cada ação também no formato ` +
@@ -136,9 +138,7 @@ export async function organizeWithClaude(
     `   • O 📅 YYYY-MM-DD SÓ entra quando um prazo foi mencionado na conversa ou é claramente ` +
     `inferível dela (converta "amanhã", "até sexta", "semana que vem" usando a data da reunião). ` +
     `Sem prazo → omita o 📅 inteiro, não invente data.\n` +
-    `   • Responsável diferente do usuário que gravou → prefixe a descrição com **Nome:** ` +
-    `(ex: \`- [ ] **Ana:** revisar contrato 📅 2026-08-07 #meeting/action\`). Se a ação é do próprio ` +
-    `usuário, sem prefixo.\n` +
+    `   • Sem prefixo de responsável: toda task é do usuário.\n` +
     `   • A tag #meeting/action é obrigatória em toda linha — é o que alimenta o dashboard Tasks.md do vault.\n` +
     `6. Sua ÚLTIMA mensagem deve conter APENAS a nota final no formato do contrato acima — ` +
     `sem preâmbulo, sem explicações, sem cercas de código em volta.\n` +

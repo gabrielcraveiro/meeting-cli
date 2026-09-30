@@ -86,9 +86,9 @@ const DEFAULT_PROMPT =
   '- A data 📅 YYYY-MM-DD SO aparece quando um prazo foi mencionado na conversa ou e claramente ' +
   'inferivel dela (ex: "ate sexta", "amanha", "na proxima sprint"). Se nao houver prazo, OMITA o 📅 ' +
   'por completo — nao invente data, nao escreva "A definir".\n' +
-  '- Quando o responsavel NAO for o usuario que gravou a reuniao, comece a descricao com o nome em ' +
-  'negrito seguido de dois pontos: `- [ ] **Ana:** revisar contrato de elegibilidade #meeting/action`\n' +
-  '- Quando o responsavel for o proprio usuario, escreva a acao direto, sem prefixo de nome.\n' +
+  '- So entra acao DO USUARIO que gravou a reuniao (ele assumiu ou aceitou). Acao de terceiro nunca ' +
+  'vira task: se a entrega e para o usuario, registre em Pontos em Aberto como "aguardando <Nome>: <o que>".\n' +
+  '- Escreva a acao direto, sem prefixo de nome.\n' +
   '- A tag #meeting/action e OBRIGATORIA no fim de cada linha (e o que alimenta o dashboard Tasks.md).\n' +
   '- Use `- [ ] ` exatamente (checkbox desmarcado), sem numeracao e sem indentacao.\n\n' +
   '## Pontos em Aberto\n- Questoes levantadas SEM resolucao clara. Riscos. Dependencias externas. Divergencias de opiniao nao resolvidas.\n' +
