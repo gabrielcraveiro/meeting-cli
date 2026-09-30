@@ -156,6 +156,23 @@ export type OpenTask = {
   noteDate: string;
 };
 
+/** Assunto em aberto (#meeting/topic). Fecha pelo mesmo api.taskClose. */
+export type OpenTopic = {
+  file: string;
+  line: string;
+  subject: string;
+  /** o que falta para fechar */
+  missing?: string;
+  /** pessoa, papel ou evento aguardado */
+  waitingOn?: string;
+  noteTitle: string;
+  noteDate: string;
+  series?: string;
+  themes: string[];
+  /** só no card da call: por que entrou (mesma série, mesmo tema ou texto) */
+  why?: 'serie' | 'tema' | 'texto';
+};
+
 export type Meeting = {
   title: string;
   startIso: string;
@@ -264,6 +281,8 @@ export const api = {
       context: string | null;
       tasks: OpenTask[];
       related: Array<{ file: string; title: string; date: string }>;
+      /** ausente em daemon antigo (antes do restart) */
+      topics?: OpenTopic[];
     }>('/session/pauta', { timeoutMs: 30000 }),
 
   /** Notas macro por tema (Temas/) + sugestões de cluster. Só leitura local. */
@@ -307,6 +326,9 @@ export const api = {
 
   /** Action items abertos agregados de todas as notas de reunião. */
   tasksOpen: () => request<{ tasks: OpenTask[] }>('/tasks/open', { timeoutMs: 20000 }),
+
+  /** Assuntos em aberto de todas as notas (varre o vault — pode levar alguns segundos). */
+  openTopics: () => request<{ topics: OpenTopic[] }>('/open-topics', { timeoutMs: 20000 }),
 
   /** Conclui uma tarefa (flip `- [ ]` → `- [x] ✅ hoje` na nota de origem). */
   taskClose: (file: string, line: string) =>

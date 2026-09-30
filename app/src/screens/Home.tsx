@@ -180,7 +180,7 @@ export function Home({
           <button
             className="btn-ghost chat-entry tasks-entry"
             onClick={onOpenTasks}
-            title={overdueCount > 0 ? `Tarefas — ${overdueCount} vencida(s)` : 'Tarefas abertas de todas as reuniões'}
+            title={overdueCount > 0 ? `Pendências — ${overdueCount} ação(ões) vencida(s)` : 'Assuntos em aberto e ações de todas as reuniões'}
             aria-label="Abrir tarefas"
           >
             <ChecklistIcon />

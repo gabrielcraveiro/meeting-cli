@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackIcon, CloseIcon, SendIcon, StopIcon, WaveIcon } from '../components/Icons';
 import { Markdown } from '../components/Markdown';
 import { TranscriptPanel } from '../components/TranscriptPanel';
-import { ApiError, api, friendlyError, type Insight, type OpenTask, type Status } from '../lib/api';
+import { ApiError, api, friendlyError, type Insight, type OpenTask, type OpenTopic, type Status } from '../lib/api';
 import { mmss } from '../lib/format';
 import { subscribeSse } from '../lib/sse';
 
@@ -395,6 +395,7 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
     context: string | null;
     tasks: OpenTask[];
     related: Array<{ file: string; title: string; date: string }>;
+    topics?: OpenTopic[];
   };
   const [pauta, setPauta] = useState<Pauta | null>(null);
   const [pautaDismissed, setPautaDismissed] = useState(false);
@@ -403,7 +404,8 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
   const [pautaClosed, setPautaClosed] = useState<Set<string>>(new Set());
   const [pautaCloseError, setPautaCloseError] = useState<string | null>(null);
 
-  const closePautaTask = async (t: OpenTask) => {
+  // Assunto fecha pelo mesmo endpoint da tarefa: o token é {file, line}.
+  const closePautaTask = async (t: { file: string; line: string }) => {
     const key = `${t.file}|${t.line}`;
     if (pautaClosed.has(key)) return;
     setPautaClosed((prev) => new Set(prev).add(key));
@@ -430,7 +432,7 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
       try {
         const r = await api.sessionPauta();
         if (!alive) return false;
-        if (r.context || r.tasks.length > 0 || r.related.length > 0) {
+        if (r.context || r.tasks.length > 0 || r.related.length > 0 || (r.topics?.length ?? 0) > 0) {
           setPauta(r);
           return true;
         }
@@ -541,6 +543,37 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
                 })}
               </div>
             )}
+            {(pauta.topics?.length ?? 0) > 0 && (
+              <>
+                <span className="pauta-section">Em aberto</span>
+                <ul className="pauta-list">
+                  {pauta.topics!.map((t) => {
+                    const done = pautaClosed.has(`${t.file}|${t.line}`);
+                    return (
+                      <li key={`${t.file}|${t.line}`} className={`pauta-task ${done ? 'is-done' : ''}`}>
+                        <input
+                          type="checkbox"
+                          className="task-check"
+                          checked={done}
+                          disabled={done}
+                          onChange={() => void closePautaTask(t)}
+                          aria-label={`Resolvido: ${t.subject}`}
+                          title={`Resolvido (fecha na nota "${t.noteTitle}")`}
+                        />
+                        <span>
+                          <strong>{t.subject}</strong>
+                          {t.missing && <> — falta {t.missing}</>}
+                          {t.waitingOn && <span className="pauta-due"> · aguardando {t.waitingOn}</span>}
+                          {t.why === 'tema' && t.themes[0] && (
+                            <span className="pauta-due" title="Mesmo tema, outra série de reuniões"> · {t.themes[0]}</span>
+                          )}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
             {pauta.tasks.length > 0 && (
               <ul className="pauta-list">
                 {pauta.tasks.slice(0, 5).map((t) => {
@@ -567,7 +600,7 @@ export function NoteSession({ status, onStopped, onBack, onOpenTasks }: Props) {
                 {pauta.tasks.length > 5 && (
                   <li className="pauta-more">
                     <button className="pauta-link" onClick={onOpenTasks}>
-                      +{pauta.tasks.length - 5} pendências — ver Tarefas →
+                      +{pauta.tasks.length - 5} pendências — ver Pendências →
                     </button>
                   </li>
                 )}

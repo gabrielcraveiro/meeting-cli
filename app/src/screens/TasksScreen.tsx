@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BackIcon } from '../components/Icons';
-import { api, friendlyError, type NoteSummary, type OpenTask } from '../lib/api';
+import { api, friendlyError, type NoteSummary, type OpenTask, type OpenTopic } from '../lib/api';
 import { relativeDay } from '../lib/format';
 
 type Props = {
@@ -8,7 +8,10 @@ type Props = {
   onOpenNote: (note: NoteSummary) => void;
 };
 
-const taskKey = (t: OpenTask) => `${t.file}|${t.line}`;
+const taskKey = (t: { file: string; line: string }) => `${t.file}|${t.line}`;
+const NO_THEME = 'Sem tema';
+
+type Tab = 'assuntos' | 'acoes';
 /** tempo do risco no texto antes do item sair da lista */
 const CLOSE_ANIM_MS = 450;
 /** Tarefa de reunião com mais de 14 dias e sem prazo pela frente quase sempre
@@ -21,12 +24,17 @@ function isStale(t: OpenTask, today: string, cutoff: string): boolean {
   return !upcoming && !!t.noteDate && t.noteDate < cutoff;
 }
 
-/** Agregado dos action items abertos de todas as reuniões. "Com você" vem
- * primeiro (tarefa sem dono = sua, convenção do organizador); delegadas
- * agrupadas por responsável. Marcar o checkbox grava `- [x] … ✅ hoje` na
- * nota de origem — o Obsidian Tasks vê o mesmo estado. */
+/** Pendências de todas as reuniões, em duas abas.
+ * - Assuntos (padrão): o que ficou sem desfecho, agrupado por tema. É o que
+ *   o usuário acompanha de fato — assunto atravessa reuniões, action solta não.
+ * - Minhas ações: action items. "Com você" primeiro; delegadas antigas (de
+ *   antes do organizador parar de criá-las) agrupadas por responsável.
+ * Marcar o checkbox grava `- [x] … ✅ hoje` na nota de origem — o Obsidian
+ * vê o mesmo estado. */
 export function TasksScreen({ onBack, onOpenNote }: Props) {
+  const [tab, setTab] = useState<Tab>('assuntos');
   const [tasks, setTasks] = useState<OpenTask[] | null>(null);
+  const [topics, setTopics] = useState<OpenTopic[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** flip em andamento — item fica riscado até sair da lista */
   const [closing, setClosing] = useState<Set<string>>(new Set());
@@ -38,11 +46,17 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await api.tasksOpen();
+      const [r, t] = await Promise.all([
+        api.tasksOpen(),
+        // daemon antigo não tem a rota: sem assuntos, a aba de ações segue
+        api.openTopics().catch(() => ({ topics: [] as OpenTopic[] })),
+      ]);
       setTasks(r.tasks ?? []);
+      setTopics(t.topics ?? []);
       setClosing(new Set());
     } catch (err) {
       setTasks([]);
+      setTopics([]);
       setError(friendlyError(err));
     }
   }, []);
@@ -51,7 +65,7 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
     void load();
   }, [load]);
 
-  const close = async (t: OpenTask) => {
+  const close = async (t: { file: string; line: string }) => {
     const key = taskKey(t);
     if (closing.has(key)) return;
     setClosing((prev) => new Set(prev).add(key));
@@ -60,6 +74,7 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
       // risca por um instante, depois sai — feedback antes da remoção
       setTimeout(() => {
         setTasks((prev) => (prev ? prev.filter((x) => taskKey(x) !== key) : prev));
+        setTopics((prev) => (prev ? prev.filter((x) => taskKey(x) !== key) : prev));
       }, CLOSE_ANIM_MS);
     } catch (err) {
       setError(friendlyError(err));
@@ -99,6 +114,49 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
     byOwner.set(key, [...(byOwner.get(key) ?? []), t]);
   }
   const ownerGroups = [...byOwner.entries()].sort((a, b) => b[1].length - a[1].length);
+
+  // Assuntos por tema (o primeiro da nota); tema com mais assuntos primeiro,
+  // "Sem tema" sempre por último.
+  const byTheme = new Map<string, OpenTopic[]>();
+  for (const t of topics ?? []) {
+    const key = t.themes[0] ?? NO_THEME;
+    byTheme.set(key, [...(byTheme.get(key) ?? []), t]);
+  }
+  const themeGroups = [...byTheme.entries()].sort((a, b) =>
+    (a[0] === NO_THEME ? 1 : 0) - (b[0] === NO_THEME ? 1 : 0) || b[1].length - a[1].length);
+
+  const openSource = (file: string, title: string, date: string) =>
+    onOpenNote({ file, title, date, participants: [], tags: [] });
+
+  const renderTopic = (t: OpenTopic) => {
+    const key = taskKey(t);
+    const isClosing = closing.has(key);
+    return (
+      <li key={key} className={`task-item ${isClosing ? 'is-closing' : ''}`}>
+        <input
+          type="checkbox"
+          className="task-check"
+          checked={isClosing}
+          disabled={isClosing}
+          onChange={() => void close(t)}
+          aria-label={`Resolvido: ${t.subject}`}
+        />
+        <div className="task-main">
+          <span className="task-text">
+            <strong>{t.subject}</strong>
+            {t.missing && <> — falta {t.missing}</>}
+          </span>
+          <span className="task-meta">
+            {t.waitingOn && <span className="task-owner">aguardando {t.waitingOn}</span>}
+            <span className="task-due">{relativeDay(t.noteDate)}</span>
+            <button className="task-note" onClick={() => openSource(t.file, t.noteTitle, t.noteDate)} title={t.file}>
+              {t.noteTitle}
+            </button>
+          </span>
+        </div>
+      </li>
+    );
+  };
 
   const renderItem = (t: OpenTask, showOwner: boolean) => {
     const key = taskKey(t);
@@ -151,8 +209,16 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
         <button className="btn-ghost" onClick={onBack} aria-label="Voltar">
           <BackIcon />
         </button>
-        <h1 className="chat-title">Tarefas</h1>
-        {tasks !== null && tasks.length > 0 && (
+        <h1 className="chat-title">Pendências</h1>
+        <div className="tasks-tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'assuntos'} className={`tasks-tab ${tab === 'assuntos' ? 'is-on' : ''}`} onClick={() => setTab('assuntos')}>
+            Assuntos{topics && topics.length > 0 ? ` ${topics.length}` : ''}
+          </button>
+          <button role="tab" aria-selected={tab === 'acoes'} className={`tasks-tab ${tab === 'acoes' ? 'is-on' : ''}`} onClick={() => setTab('acoes')}>
+            Minhas ações{mine.length > 0 ? ` ${mine.length}` : ''}
+          </button>
+        </div>
+        {tab === 'acoes' && tasks !== null && tasks.length > 0 && (
           <span className="tasks-count">
             {fresh.length} abertas{overdueCount > 0 ? ` · ${overdueCount} vencidas` : ''}
             {stale.length > 0 ? ` · ${stale.length} antigas` : ''}
@@ -163,7 +229,26 @@ export function TasksScreen({ onBack, onOpenNote }: Props) {
       <div className="tasks-body">
         {error && <p className="chat-error">{error}</p>}
 
-        {tasks === null ? (
+        {tab === 'assuntos' ? (
+          topics === null ? (
+            <p className="muted pad">Varrendo as notas do vault…</p>
+          ) : topics.length === 0 ? (
+            <div className="tasks-empty">
+              <span className="tasks-empty-glyph" aria-hidden>☀</span>
+              <p>Nenhum assunto em aberto.</p>
+              <p className="muted">As próximas notas trazem o que ficou sem desfecho em cada reunião.</p>
+            </div>
+          ) : (
+            themeGroups.map(([theme, list]) => (
+              <section className="task-group" key={theme}>
+                <h2 className={`task-group-label ${theme === NO_THEME ? '' : 'task-group-mine'}`}>
+                  {theme} <span className="task-group-count">{list.length}</span>
+                </h2>
+                <ul className="tasks-list">{list.map(renderTopic)}</ul>
+              </section>
+            ))
+          )
+        ) : tasks === null ? (
           <p className="muted pad">Varrendo as notas do vault…</p>
         ) : tasks.length === 0 && !error ? (
           <div className="tasks-empty">
