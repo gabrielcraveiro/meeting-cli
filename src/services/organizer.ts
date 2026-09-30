@@ -163,19 +163,69 @@ export interface ParsedSummary {
  * "Participantes: ...", ultima linha "Tags: ...". Compartilhado entre o
  * finalize sincrono (CLI interativo) e o worker `meeting organize-job`.
  */
+/** Até onde procurar a linha "Participantes:" — o preâmbulo real nunca passa disso. */
+const PREAMBLE_SCAN_LINES = 25;
+/** Título de reunião é curto; frase longa é o agente falando consigo mesmo. */
+const MAX_TITLE_CHARS = 140;
+/** Começos típicos de comentário do agente que vazaram como título (casos reais do vault). */
+const META_TITLE_RE = new RegExp([
+  '^antes d[aeo]\\b.*\\bnota', '^confirm(ed|ei|ado)\\b', '^encontrei\\b', '^consulta [àa]s notas',
+  '^contexto de reuni', '^no (pending|direct)\\b', '^this confirms', '^now i\\b',
+  '^vou (gerar|montar|produzir)', '^segue (a )?nota', '^agora (vou|tenho)', '^[⚠★☆`>]',
+].join('|'), 'i');
+/** "Ana Souza, Bruno Lima" — a linha de participantes sem o rótulo. */
+const NAME_LIST_RE = /^\p{Lu}[\p{L}'-]+(\s+(d[aeo]s?\s+)?\p{Lu}[\p{L}'-]+)+(\s*,\s*\p{Lu}[\p{L}'-]+(\s+(d[aeo]s?\s+)?\p{Lu}[\p{L}'-]+)+)+$/u;
+
+/**
+ * True when `line` can be a meeting title. Rejects agent chatter, long
+ * sentences and labels. Exported for the vault title repair script.
+ */
+export function looksLikeTitle(line: string): boolean {
+  const t = line.trim();
+  if (!t || t.length > MAX_TITLE_CHARS) return false;
+  if (META_TITLE_RE.test(t) || NAME_LIST_RE.test(t)) return false;
+  if (/[:.]$/.test(t)) return false;                 // frase/rótulo, não título
+  if (/\b(a nota|nota final|nota da reuni|no vault)\b/i.test(t)) return false;
+  return true;
+}
+
+/**
+ * Corta o preâmbulo usando o próprio contrato da nota: a linha logo acima de
+ * "Participantes:" é o título. Mais robusto que listar preâmbulos conhecidos —
+ * o agente inventa um formato novo de comentário a cada tanto.
+ */
+function cutAtContract(lines: string[]): string[] {
+  const limit = Math.min(lines.length, PREAMBLE_SCAN_LINES);
+  for (let i = 1; i < limit; i++) {
+    if (!/^participantes\s*:/i.test(lines[i].trim())) continue;
+    let j = i - 1;
+    while (j >= 0 && !lines[j].trim()) j--;
+    const candidate = lines[j]?.replace(/^#+\s*/, '').replace(/^\*\*(.+)\*\*$/, '$1') ?? '';
+    if (j >= 0 && looksLikeTitle(candidate)) return lines.slice(j);
+    return lines.slice(i);  // sem título válido acima: começa em Participantes
+  }
+  return lines;
+}
+
 export function parseOrganizedSummary(raw: string): ParsedSummary {
-  const lines = stripMetaPreamble(raw).split('\n');
+  const lines = cutAtContract(stripMetaPreamble(raw).split('\n'));
   let title = '';
   let participants: string[] = [];
   const tags: string[] = [];
 
   if (lines.length >= 1) {
+    // "## Seção" na primeira linha = o modelo pulou o título. A checagem era
+    // feita DEPOIS de tirar os "#", então "## Resumo" virava o título.
+    const isSection = /^\s*##/.test(lines[0]);
     const firstLine = lines[0].replace(/^#+\s*/, '').trim();
     // "Participantes:" na primeira linha = o modelo pulou o título; deixa a
     // linha para o parse de participantes abaixo em vez de virar título.
-    if (firstLine && !firstLine.startsWith('##') && !firstLine.startsWith('|') && !firstLine.startsWith('-')
+    if (firstLine && !isSection && !firstLine.startsWith('|') && !firstLine.startsWith('-')
         && !/^participantes\s*:/i.test(firstLine)) {
-      title = firstLine;
+      // Linha que não passa no teste sai da nota, mas não vira título: o
+      // chamador cai no título do calendário (melhor que frase do agente).
+      const clean = firstLine.replace(/^\*\*(.+)\*\*$/, '$1').trim();  // "**Título**" → "Título"
+      title = looksLikeTitle(clean) ? clean : '';
       lines.shift();
     }
   }
