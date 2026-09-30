@@ -4,6 +4,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import type { Config } from '../config';
 import type { OrganizeResult, OrganizeOptions } from './organizer';
+import { seriesKey } from './series';
 import { resolveClaudeBin, claudeSpawnEnv } from './claudeBin';
 
 // Claude Code headless engine — same style as the poc-automvp runner:
@@ -51,6 +52,11 @@ export async function organizeWithClaude(
 
   const meta: string[] = [];
   if (options?.meetingDate) meta.push(`Data da reunião: ${options.meetingDate}`);
+  const series = seriesKey(options?.series);
+  if (series) {
+    meta.push(`Série desta reunião (título do calendário): "${series}" — notas anteriores da MESMA série ` +
+      `têm \`series: "${series}"\` no frontmatter (use Grep nisso para achá-las).`);
+  }
   if (options?.participants?.length) {
     meta.push(`Participantes na call (roster real, inclui quem só ouviu): ${options.participants.join(', ')}`);
   }
@@ -97,9 +103,13 @@ export async function organizeWithClaude(
     `4. Use o que encontrar para: corrigir erros de transcrição em nomes próprios, siglas e jargões ` +
     `(o ASR erra termos como nomes de sistemas internos — o vault tem a grafia correta); inferir ` +
     `identidades dos speakers; conectar decisões e action items com reuniões passadas.\n` +
-    `4b. FECHAMENTO DE PENDÊNCIAS (ciclo Granola): use Grep para achar action items ABERTOS no vault ` +
-    `(linhas \`- [ ]\` com #meeting/action). Se a transcrição DESTA reunião evidenciar que um deles foi ` +
-    `CONCLUÍDO (alguém relata que fez: "já subiu", "assinado", "enviado", "resolvido"), você NÃO edita ` +
+    `4b. FECHAMENTO DE PENDÊNCIAS (ciclo Granola): use Grep para achar itens ABERTOS no vault ` +
+    `(linhas \`- [ ]\` com #meeting/action ou #meeting/topic — comece pelas notas da MESMA série). ` +
+    `Feche uma action quando a transcrição DESTA reunião evidenciar que foi CONCLUÍDA (alguém relata ` +
+    `que fez: "já subiu", "assinado", "enviado", "resolvido"). Feche um assunto (#meeting/topic) quando ` +
+    `ele foi RESOLVIDO nesta reunião, OU quando avançou e você o reescreve atualizado na seção ` +
+    `"Assuntos em aberto" desta nota (o assunto vive numa linha só: a versão nova substitui a antiga). ` +
+    `Em qualquer caso você NÃO edita ` +
     `nada — apenas PROPONHA o fechamento no fim da sua resposta, depois de tudo, num bloco exatamente assim:\n` +
     `<!--meeting-cli:fechar\n` +
     `caminho/relativo/da/nota.md :: - [ ] linha exata do item como está no arquivo #meeting/action\n` +
@@ -119,6 +129,19 @@ export async function organizeWithClaude(
     `anterior sobre o mesmo tema); use o nome EXATO do arquivo confirmado via Glob/Grep (nomes têm ` +
     `espaços, datas e acentos); NUNCA linke arquivo que você não confirmou existir — link quebrado é ` +
     `pior que link nenhum. Se nada for genuinamente relacionado, omita a seção.\n` +
+    `4d. ASSUNTOS EM ABERTO — o que o usuário mais acompanha: temas que ficaram SEM desfecho e ` +
+    `vão voltar numa próxima reunião (decisão pendente, aprovação que falta, dúvida sem dono, ` +
+    `dependência externa, divergência não resolvida). Seção \`## Assuntos em aberto\`, uma linha por assunto:\n` +
+    `   - [ ] **<assunto curto e específico>** — falta: <o que falta para fechar> · aguardando: <quem ou o quê> #meeting/topic\n` +
+    `   • ESPECÍFICO e reconhecível semanas depois: use o identificador que a conversa usou ` +
+    `(nº da RDM, sistema, cliente, feature). "RDM 74892 — logs de auditoria de beneficiário" sim; ` +
+    `"melhorias" ou "próximos passos" não.\n` +
+    `   • Se o assunto JÁ existe aberto no vault (Grep de #meeting/topic), reescreva-o aqui atualizado ` +
+    `com o MESMO nome em negrito e proponha fechar a linha antiga (passo 4b) — nunca duplique.\n` +
+    `   • "aguardando" é pessoa, papel ou evento ("Denis", "jurídico", "janela de deploy de 01/10"); ` +
+    `omita "· aguardando: …" se ninguém foi nomeado.\n` +
+    `   • Não é assunto: o que foi decidido e encerrado, status informativo, action item do usuário ` +
+    `(esse vai no passo 5). MÁXIMO 6 por reunião; nenhum → omita a seção.\n` +
     `5. ACTION ITEMS SÃO RAROS E CAROS — critério duro (aprendido no uso: dezenas de tasks ` +
     `geradas viram lista morta que ninguém revê):\n` +
     `   • Só vira task o que alguém ASSUMIU explicitamente em voz ("eu faço", "pode deixar comigo", ` +

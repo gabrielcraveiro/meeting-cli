@@ -84,6 +84,7 @@ export interface OrganizeOptions {
   participants?: string[];  // from calendar, helps speaker inference
   extraContext?: string;    // additional context (past meetings, etc.)
   userNotes?: UserNote[];   // anotações do usuário ao vivo — ESQUELETO da nota final
+  series?: string;          // título do calendário/Teams — acha as notas irmãs da série
 }
 
 /**

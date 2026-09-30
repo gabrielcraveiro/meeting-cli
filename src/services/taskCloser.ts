@@ -65,7 +65,8 @@ export function closeSingleTask(config: Config, relFile: string, taskLine: strin
   const target = path.resolve(vaultRoot, relFile);
   if (!target.startsWith(vaultRoot + path.sep)) return false;
   if (!target.endsWith('.md') || !fs.existsSync(target)) return false;
-  if (!taskLine.startsWith('- [ ]') || !taskLine.includes('#meeting/action')) return false;
+  // Assunto em aberto (#meeting/topic) fecha pelo mesmo caminho da action.
+  if (!taskLine.startsWith('- [ ]') || !/#meeting\/(action|topic)\b/.test(taskLine)) return false;
 
   try {
     const content = fs.readFileSync(target, 'utf-8');

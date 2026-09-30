@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { seriesKey } from './series';
 import { Config } from '../config';
 
 export interface MeetingMeta {
@@ -165,6 +166,8 @@ export async function createMeetingNote(
     meetingType?: string;
     /** true quando o usuário fez anotações ao vivo (esqueleto da nota) */
     sourceNotes?: boolean;
+    /** Título do calendário/Teams; vira `series:` (ver services/series.ts) */
+    series?: string;
   }
 ): Promise<string> {
   const meetingsDir = path.join(config.vaultPath, 'Meetings');
@@ -182,6 +185,8 @@ export async function createMeetingNote(
     ? `\nparticipants: [${params.participants.join(', ')}]` : '';
   const meetingType = params.meetingType || 'default';
   const sourceNotesLine = params.sourceNotes ? '\nsourceNotes: true' : '';
+  const series = seriesKey(params.series);
+  const seriesLine = series ? `\nseries: "${series.replace(/"/g, "'")}"` : '';
   const audioEmbed = params.audioPath ? `![[${params.audioPath}]]\n` : '';
 
   const content = `---
@@ -190,7 +195,7 @@ meeting_type: ${meetingType}
 tags: [${allTags.join(', ')}]${participantsList}${sourceNotesLine}
 date: ${params.date}
 time: ${params.time}
-title: "${title}"
+title: "${title}"${seriesLine}
 status: done
 audio_seconds: ${Math.round(params.durationSec)}
 audio_deleted: ${!params.audioPath}

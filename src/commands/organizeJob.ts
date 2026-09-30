@@ -80,6 +80,7 @@ export async function cmdOrganizeJob(jobFile: string): Promise<void> {
       participants: parsed.participants,
       meetingType: job.note.meetingType,
       sourceNotes: job.note.sourceNotes,
+      series: job.options?.series || job.note.topic,
     });
 
     // A definitiva substitui a provisória (a menos que tenham caído no mesmo path)

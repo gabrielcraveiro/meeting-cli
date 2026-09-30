@@ -1329,6 +1329,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
         participants: [],
         meetingType: templateName,
         sourceNotes: userNotes.length > 0,
+        series: topic || undefined,
       });
 
       const jobsDir = path.join(os.homedir(), '.config', 'meeting-cli', 'organize-jobs');
@@ -1344,6 +1345,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
           participants: calendarAttendees.length > 0 ? calendarAttendees : undefined,
           extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
           userNotes: userNotes.length > 0 ? userNotes : undefined,
+          series: topic || undefined,
         },
         note: {
           audioPath: keepAudio ? `Recordings/${finalAudioName}` : undefined,
@@ -1379,6 +1381,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
         participants: calendarAttendees.length > 0 ? calendarAttendees : undefined,
         extraContext: extraContext.length > 0 ? extraContext.join('\n\n') : undefined,
         userNotes: userNotes.length > 0 ? userNotes : undefined,
+        series: topic || undefined,
       });
       summary = result.text;
       chatCost = result.costUsd;
@@ -1446,6 +1449,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
       participants,
       meetingType: templateName,
       sourceNotes: userNotes.length > 0,
+      series: topic || undefined,
     });
     s.success({ text: path.basename(notePath) });
 
