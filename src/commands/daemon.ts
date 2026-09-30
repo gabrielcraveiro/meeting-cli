@@ -16,6 +16,7 @@ import { addGlossaryEntry, loadGlossary } from '../services/glossary';
 import { generatePrepNote, isIgnoredMeeting, archiveStalePreps } from '../services/prep';
 import { listOpenTasks, closeSingleTask } from '../services/taskCloser';
 import { chatWithMeetings } from '../services/organizer';
+import { listOpenTopics, topicsForCall } from '../services/openTopics';
 import { buildTopicNote, listTopics, suggestTopics } from '../services/topicNotes';
 
 // `meeting daemon` — HTTP bridge for the browser extension AND for the desktop app.
@@ -708,6 +709,14 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
         return json(res, 200, { tasks: listOpenTasks(config) }, origin);
       }
 
+      // Assuntos em aberto (#meeting/topic) de todas as notas. Fecha pelo
+      // mesmo POST /tasks/close — o token é o mesmo par {file, line}.
+      case '/open-topics': {
+        const config = cfg();
+        if (!config) return json(res, 404, { error: 'config não encontrada' }, origin);
+        return json(res, 200, { topics: listOpenTopics(config) }, origin);
+      }
+
       // Prep da reunião ATUAL (nota "(prep)" gerada 10min antes): o app usa
       // como esqueleto inicial do notepad quando a call começa. Casa por
       // título-base OU por horário (evento até 40min atrás / 15min à frente).
@@ -828,7 +837,14 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
           callCtxCache = { key: session.key, value: context };
         }
 
-        return json(res, 200, { context, tasks: hints, related }, origin);
+        // Assuntos em aberto da MESMA série primeiro, depois do mesmo tema. O
+        // título da call é o do calendário — a identidade estável da série.
+        const callTopics = topicsForCall(listOpenTopics(config), config, session.title ?? '', isTopical);
+
+        return json(res, 200, {
+          context, tasks: hints, related,
+          topics: callTopics.topics, series: callTopics.series, themes: callTopics.themes,
+        }, origin);
       }
 
       // Notas macro por tema (Temas/): lista + sugestões de cluster. Tudo

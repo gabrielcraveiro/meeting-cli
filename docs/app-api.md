@@ -85,7 +85,20 @@ Pergunta agêntica ao vault: roda o `claude` headless com tools read-only
   (ex: binário `claude` fora do PATH).
 - Funciona gravando ou não. Início, fim, duração e custo vão para `/daemon/logs`.
 
+## Pendências (fora de sessão)
+
+- `GET /tasks/open` → `{ tasks: [{ file, line, text, owner?, mine, due?, noteTitle, noteDate }] }`
+  — actions abertas (`#meeting/action`)
+- `GET /open-topics` → `{ topics: [{ file, line, subject, missing?, waitingOn?, noteTitle,
+  noteDate, series?, themes[] }] }` — assuntos em aberto (`#meeting/topic`), mais recentes primeiro
+- `POST /tasks/close` `{ file, line }` → `{ ok }` — fecha action OU assunto (`- [x] … ✅ data`
+  na nota de origem). 409 se a linha mudou: recarregue a lista
+
 ## Sessão ao vivo (só respondem 409 se não gravando)
+
+- `GET /session/pauta` → `{ context, tasks[], related[], topics[], series, themes[] }` —
+  `topics` = assuntos em aberto desta call, com `why: 'serie' | 'tema' | 'texto'`
+  (mesma série do calendário → mesmo tema da série → texto do título)
 
 - `GET /session/transcript/stream` — SSE. Ao conectar: evento `snapshot`
   `{ lines: [...] }`; depois `line` `{ ts, speaker, text }` (ts = segundos) e
