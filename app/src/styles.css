@@ -1185,20 +1185,143 @@ button:disabled {
   line-height: 1.62;
 }
 
+/* Um turno = falas seguidas da mesma pessoa. O nome aparece uma vez e o
+   texto flui em parágrafo; a cor por falante (--spk-hue, vinda do TSX) deixa
+   achar "quem falou" sem ler. Saturação/luz baixas para não competir com as
+   notas — é uma lateral de consulta, não o foco. */
+.spk {
+  --spk-ink: hsl(var(--spk-hue, 80) 28% 36%);
+}
+
+[data-theme='dark'] .spk {
+  --spk-ink: hsl(var(--spk-hue, 80) 32% 70%);
+}
+
+.tturn {
+  margin: 0 0 14px;
+}
+
+/* Participação: barra fina + legenda curta. Fica fora do corpo rolável para
+   estar sempre visível — é o que se consulta de relance numa 1:1/daily. */
+.talk {
+  flex: 0 0 auto;
+  padding: 8px 14px 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.talk-bar {
+  display: flex;
+  gap: 2px;
+  height: 4px;
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.talk-seg {
+  flex: 1 1 0;
+  min-width: 3px; /* quem falou pouco ainda aparece */
+  background: var(--spk-ink);
+  opacity: 0.8;
+  transition: flex-grow 400ms ease;
+}
+
+.talk-legend {
+  display: flex;
+  gap: 10px;
+  margin-top: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.talk-item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.talk-name {
+  font-weight: 600;
+  color: var(--spk-ink);
+}
+
+/* Pílula "↓ N falas novas": aparece só quando o usuário rolou para cima e
+   chegou fala nova. Some ao voltar para o fim. */
+.tlive-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+  animation: pill-in 160ms ease both;
+}
+
+.tlive-pill:hover {
+  color: var(--ink);
+  background: var(--cream-deep);
+}
+
+@keyframes pill-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+.tturn-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.tturn-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--spk-ink);
+  transform: translateY(-1px);
+}
+
 .tline {
-  margin: 0 0 7px;
+  margin: 0 0 5px;
+  padding-left: 12px; /* alinha o texto com o nome, depois da bolinha */
   color: var(--ink-soft);
 }
 
 .tline-ts {
+  margin-left: auto;
   font-variant-numeric: tabular-nums;
   color: var(--ink-faint);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .tline-speaker {
+  min-width: 0; /* nome comprido corta em vez de empurrar o horário */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
-  color: var(--sage-deep);
+  color: var(--spk-ink, var(--sage-deep));
+}
+
+/* hover mostra o horário exato da frase (title) — realce discreto do trecho */
+.tline-text:hover {
+  background: var(--cream-deep);
+  border-radius: 3px;
 }
 
 /* ---------------------------------------------------------------- daemon */
