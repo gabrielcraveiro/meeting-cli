@@ -47,9 +47,16 @@ async function post(route: string, body: unknown, timeoutMs = 4000): Promise<voi
   }
 }
 
-export function reportTranscript(lines: ReportedLine[]): void {
-  if (!enabled || lines.length === 0) return;
-  void post('/internal/transcript', { lines });
+/**
+ * Send transcript lines to the daemon.
+ *
+ * `replaceTail` removes that many lines from the END of the live transcript
+ * before the append. Use it when a caption revision rewrites lines that were
+ * already sent. Default 0 = plain append.
+ */
+export function reportTranscript(lines: ReportedLine[], replaceTail = 0): void {
+  if (!enabled || (lines.length === 0 && replaceTail === 0)) return;
+  void post('/internal/transcript', replaceTail > 0 ? { lines, replaceTail } : { lines });
 }
 
 export function reportInsight(ts: number, text: string): void {

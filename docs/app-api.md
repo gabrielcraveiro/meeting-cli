@@ -88,7 +88,9 @@ Pergunta agêntica ao vault: roda o `claude` headless com tools read-only
 ## Sessão ao vivo (só respondem 409 se não gravando)
 
 - `GET /session/transcript/stream` — SSE. Ao conectar: evento `snapshot`
-  `{ lines: [...] }`; depois `line` `{ ts, speaker, text }` (ts = segundos)
+  `{ lines: [...] }`; depois `line` `{ ts, speaker, text }` (ts = segundos) e
+  `replace` `{ drop, lines }` — remova as últimas `drop` linhas e acrescente
+  `lines` (revisão da legenda reescreveu falas já enviadas)
 - `GET /session/insights/stream` — SSE. Eventos `insight` `{ ts, text }`
 - `POST /session/notes` `{ text }` → `{ ok, ts }` — anotação do usuário,
   timestampada pelo daemon com o elapsed atual
@@ -113,7 +115,8 @@ wizard de speakers não identificados também é pulado em headless.
 
 A sessão (`meeting start --browser`, processo filho) REPORTA ao daemon:
 
-- `POST /internal/transcript` `{ lines: [{ ts, speaker, text }] }` (batch, a cada segmento)
+- `POST /internal/transcript` `{ lines: [{ ts, speaker, text }], replaceTail? }` (batch, a cada
+  segmento). `replaceTail: n` remove as últimas `n` linhas antes de acrescentar
 - `POST /internal/insight` `{ ts, text }`
 - `POST /internal/state` `{ phase, title?, elapsedSec? }` (a cada ~5s)
 - `POST /internal/chat-context` — NÃO existe: o chat do app é respondido PELO

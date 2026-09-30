@@ -1378,9 +1378,21 @@ export async function cmdDaemon(opts: { port?: string; headless?: boolean } = {}
             speaker: typeof l.speaker === 'string' ? l.speaker : '',
             text: String(l.text).slice(0, 4000),
           }));
-        for (const line of lines) {
-          session.transcript.push(line);
-          broadcast(session.sseTranscript, sseEvent('line', line));
+        // Revisão de legenda: a sessão reescreve as últimas falas já enviadas
+        // (o ASR do Teams completa a frase depois). Sem isso, o app ficava com
+        // a primeira versão, cortada, para sempre.
+        const drop = Math.min(
+          Number.isInteger(payload.replaceTail) && payload.replaceTail > 0 ? payload.replaceTail : 0,
+          session.transcript.length,
+        );
+        if (drop > 0) {
+          session.transcript.splice(session.transcript.length - drop, drop, ...lines);
+          broadcast(session.sseTranscript, sseEvent('replace', { drop, lines }));
+        } else {
+          for (const line of lines) {
+            session.transcript.push(line);
+            broadcast(session.sseTranscript, sseEvent('line', line));
+          }
         }
         return json(res, 200, { ok: true, total: session.transcript.length });
       }

@@ -123,6 +123,14 @@ export function TranscriptPanel() {
           setLines((prev) => [...prev, l].slice(-MAX_LINES_MEMORY));
           if (!pinnedRef.current) setUnseen((n) => n + 1);
         },
+        // Revisão da legenda: o ASR completou falas já exibidas. Troca a cauda
+        // em vez de acrescentar — senão a mesma frase aparece 2-3 vezes.
+        replace: (data) => {
+          const d = data as { drop?: number; lines?: TranscriptLine[] };
+          const drop = Math.max(0, d.drop ?? 0);
+          const fresh = Array.isArray(d.lines) ? d.lines.filter((l) => typeof l?.text === 'string') : [];
+          setLines((prev) => [...prev.slice(0, Math.max(0, prev.length - drop)), ...fresh].slice(-MAX_LINES_MEMORY));
+        },
       },
     });
     return stop;

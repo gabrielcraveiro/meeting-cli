@@ -15,7 +15,8 @@ import { getSidecarCapturePath } from './setup';
 import { getTemplate, listTemplates, getAdaptiveWrapper } from '../services/templates';
 import { getUpcomingMeetings, formatEventTime } from '../services/calendar';
 import { matchSpeaker, enrollSpeaker } from '../services/voice';
-import { readBridge } from '../services/bridge';
+import { readBridge, readCaptionSpans } from '../services/bridge';
+import { collapseCaptionRevisions } from '../services/captionRevisions';
 import { applyGlossary, glossaryPromptBlock } from '../services/glossary';
 import { applyTaskClosures } from '../services/taskCloser';
 import { notifyWindows } from '../services/notify';
@@ -565,7 +566,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
    * (nenhuma fala há >10min relativo a este segmento) — teto de perda. */
   function captionsCoverSegment(offsetSec: number): boolean {
     if (!fromBrowser) return false;
-    const spans = (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim());
+    const spans = readCaptionSpans();
     if (spans.length < 10) return false;
     const lastEnd = spans[spans.length - 1].end;
     return lastEnd >= offsetSec - 600;
@@ -672,7 +673,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     // quem falou. O Deepgram ao vivo rotula "Remoto N" e o insight sai cego
     // ("não sei quem é Remoto 0"). Deepgram fica como fallback (sem legendas).
     const spans = fromBrowser
-      ? (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim())
+      ? readCaptionSpans()
       : [];
     const useCaptions = spans.length >= 3 && spans.length > lastInsightSpanCount;
 
@@ -963,7 +964,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     let captionUtterances = 0;
     if (fromBrowser && (config.transcriptSource ?? 'auto') !== 'deepgram') {
       const bridge = readBridge();
-      const withText = (bridge?.speech ?? []).filter(sp => sp.text && sp.text.trim().length > 0);
+      const withText = collapseCaptionRevisions(bridge?.speech ?? []);
       if (withText.length > 0) {
         captionUtterances = withText.length;
         captionTranscript = withText
@@ -1702,8 +1703,10 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   let bridgeTick = 0;
   let rosterCtxIndex = -1;
   const knownBridgeParticipants = new Set(calendarAttendees);
-  /** falas das legendas já espelhadas no transcript ao vivo do app */
-  let reportedSpanCount = 0;
+  /** Falas das legendas já espelhadas no transcript ao vivo do app, como foram
+   * enviadas. Guardamos o texto (não só a contagem) porque a revisão do ASR
+   * reescreve a última fala depois de enviada — o diff acha o que substituir. */
+  let reportedSpans: { start: number; who: string; text: string }[] = [];
   function pollBridge(): void {
     if (!fromBrowser) return;
     bridgeTick++;
@@ -1715,14 +1718,21 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     // Legendas → transcript ao vivo do app (nome real por fala). O painel era
     // só Deepgram ("Remoto N"); com a pausa inteligente do Deepgram, as
     // legendas assumem como fonte principal também na tela.
-    const spansWithText = (bridge.speech ?? []).filter(sp => sp.text && sp.text.trim());
-    if (spansWithText.length > reportedSpanCount) {
-      reportTranscript(spansWithText.slice(reportedSpanCount).map(sp => ({
-        ts: Math.round(sp.start),
-        speaker: sp.who,
-        text: (sp.text || '').trim(),
-      })));
-      reportedSpanCount = spansWithText.length;
+    const spans = collapseCaptionRevisions(bridge.speech ?? [])
+      .map(sp => ({ start: Math.round(sp.start), who: sp.who, text: (sp.text || '').trim() }));
+    let same = 0;
+    while (
+      same < reportedSpans.length && same < spans.length
+      && reportedSpans[same].start === spans[same].start
+      && reportedSpans[same].who === spans[same].who
+      && reportedSpans[same].text === spans[same].text
+    ) same++;
+    if (same < spans.length || same < reportedSpans.length) {
+      reportTranscript(
+        spans.slice(same).map(sp => ({ ts: sp.start, speaker: sp.who, text: sp.text })),
+        reportedSpans.length - same,
+      );
+      reportedSpans = spans;
     }
 
     // Título corrigido mid-session (o inicial podia ser nome de participante
@@ -1907,7 +1917,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
   async function runSuggestedQuestions(): Promise<void> {
     if (questionBusy || insightBusy || chatBusy || stopping || paused) return;
     const spans = fromBrowser
-      ? (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim())
+      ? readCaptionSpans()
       : [];
     const lines = spans.length >= 10
       ? spans.map(sp => `[${formatTimestamp(sp.start)}] [${sp.who}] ${(sp.text || '').trim()}`)
@@ -1981,7 +1991,7 @@ export async function cmdStart(topicArg?: string, opts: { template?: string; bro
     // em [12:46]" com a call aos 17min).
     const CHAT_TAIL_LINES = 300;
     const spans = fromBrowser
-      ? (readBridge()?.speech ?? []).filter(sp => sp.text && sp.text.trim())
+      ? readCaptionSpans()
       : [];
     const mmssToSec = (l: string) => {
       const m = l.match(/^\[(\d+):(\d{2})\]/);

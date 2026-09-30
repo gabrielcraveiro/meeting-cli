@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { collapseCaptionRevisions } from './captionRevisions';
 
 // Bridge file: communication channel between `meeting daemon` (HTTP server that
 // receives events from the browser extension) and the recording session it spawns.
@@ -32,6 +33,12 @@ export interface BridgeState {
   stopRequested: boolean;
   /** Epoch ms of last write — sessions ignore stale files from crashed daemons */
   updatedAt: number;
+}
+
+/** Caption spans with text, with ASR revisions already collapsed.
+ * Use this instead of `readBridge().speech` when you need the spoken text. */
+export function readCaptionSpans(): SpeechSpan[] {
+  return collapseCaptionRevisions(readBridge()?.speech ?? []);
 }
 
 export function writeBridge(state: BridgeState): void {
